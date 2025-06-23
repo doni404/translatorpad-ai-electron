@@ -61,7 +61,7 @@ function setupEventListeners() {
     const upgradeBtn = document.getElementById('sidebarUpgradeBtn');
     if (upgradeBtn) {
         upgradeBtn.addEventListener('click', () => {
-            showToast('Feature under development', 'info');
+            showToast('Upgrade feature is coming soon!', 'info');
         });
     }
 
@@ -69,6 +69,12 @@ function setupEventListeners() {
     const settingsForm = document.getElementById('settingsForm');
     if (settingsForm) {
         settingsForm.addEventListener('submit', saveSettings);
+    }
+
+    // Clear history button
+    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+    if (clearHistoryBtn) {
+        clearHistoryBtn.addEventListener('click', clearHistory);
     }
 
     // Listen for capture completion
@@ -401,6 +407,7 @@ function populateLanguageSelects() {
 
 function loadHistory() {
     const historyList = document.getElementById('historyList');
+    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
     
     if (translationHistory.length === 0) {
         historyList.innerHTML = `
@@ -410,18 +417,37 @@ function loadHistory() {
                 <p>Start capturing and translating to see your history here</p>
             </div>
         `;
+        
+        // Hide clear button when no history
+        if (clearHistoryBtn) {
+            clearHistoryBtn.style.display = 'none';
+        }
         return;
     }
     
-    historyList.innerHTML = translationHistory.map(item => `
-        <div class="history-item">
-            <div class="history-date">${new Date(item.timestamp).toLocaleDateString()}</div>
-            <div class="history-text">
-                <div class="original">${item.originalText.substring(0, 100)}${item.originalText.length > 100 ? '...' : ''}</div>
-                <div class="translated">${item.translatedText.substring(0, 100)}${item.translatedText.length > 100 ? '...' : ''}</div>
+    // Show clear button when history exists
+    if (clearHistoryBtn) {
+        clearHistoryBtn.style.display = 'inline-flex';
+    }
+    
+    historyList.innerHTML = translationHistory.map(item => {
+        const date = new Date(item.timestamp);
+        const formattedDate = date.getFullYear() + '-' + 
+            String(date.getMonth() + 1).padStart(2, '0') + '-' + 
+            String(date.getDate()).padStart(2, '0') + ' ' + 
+            String(date.getHours()).padStart(2, '0') + ':' + 
+            String(date.getMinutes()).padStart(2, '0');
+        
+        return `
+            <div class="history-item">
+                <div class="history-date">${formattedDate}</div>
+                <div class="history-text">
+                    <div class="original">${item.originalText.substring(0, 100)}${item.originalText.length > 100 ? '...' : ''}</div>
+                    <div class="translated">${item.translatedText.substring(0, 100)}${item.translatedText.length > 100 ? '...' : ''}</div>
+                </div>
             </div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 function showTranslationResult(translation) {
@@ -912,5 +938,15 @@ function updateApiStatus(isConfigured, message) {
                 showAPISetupInstructions();
             });
         }
+    }
+}
+
+// Clear history
+function clearHistory() {
+    if (confirm('Are you sure you want to clear all translation history?')) {
+        translationHistory = [];
+        localStorage.setItem('translationHistory', JSON.stringify(translationHistory));
+        loadHistory();
+        showToast('Translation history cleared successfully!', 'success');
     }
 } 

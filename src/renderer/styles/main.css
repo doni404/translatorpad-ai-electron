@@ -418,6 +418,8 @@ body {
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
     max-width: 800px;
     margin: 0 auto;
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
 }
 
 .settings-section {
@@ -504,12 +506,15 @@ body {
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
     max-width: 1000px;
     margin: 0 auto;
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
 }
 
 .history-list {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    padding-bottom: 2rem;
 }
 
 .history-item {
@@ -590,6 +595,18 @@ body {
 .btn-primary:hover {
     transform: translateY(-1px);
     box-shadow: 0 8px 25px rgba(30, 149, 212, 0.4);
+}
+
+.btn-secondary {
+    background: #f7fafc;
+    color: #4a5568;
+    border: 1px solid #e2e8f0;
+}
+
+.btn-secondary:hover {
+    background: #edf2f7;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(74, 85, 104, 0.2);
 }
 
 .btn-large {
@@ -855,6 +872,17 @@ body {
     flex-direction: column;
 }
 
+/* Ensure home section (welcome page) doesn't scroll */
+.section#home {
+    overflow: hidden;
+}
+
+/* Allow history and settings sections to have scrollable content */
+.section#history,
+.section#settings {
+    overflow: visible;
+}
+
 .section-header {
     text-align: center;
     margin-bottom: 2rem;
@@ -982,4 +1010,32 @@ body {
     .feature-icon {
         font-size: 1.5rem;
     }
+}
+
+/* Custom scrollbar styling */
+.settings-content::-webkit-scrollbar,
+.history-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+.settings-content::-webkit-scrollbar-track,
+.history-content::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+.settings-content::-webkit-scrollbar-thumb,
+.history-content::-webkit-scrollbar-thumb {
+    background: rgba(30, 149, 212, 0.3);
+    border-radius: 4px;
+    transition: background 0.3s ease;
+}
+
+.settings-content::-webkit-scrollbar-thumb:hover,
+.history-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(30, 149, 212, 0.5);
+}
+
+.settings-content form {
+    padding-bottom: 2rem;
 } 
