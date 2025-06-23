@@ -13,6 +13,8 @@ class App {
     this.translationService = new TranslationService();
     this.screenshotService = new ScreenshotService();
     this.hasUsedCaptureSuccessfully = false;
+    this.globalShortcutInProgress = false; // Prevent duplicate shortcut calls
+    this.lastShortcutTime = 0; // Add cooldown tracking
     
     this.init();
   }
@@ -73,6 +75,12 @@ class App {
   }
 
   createCaptureOverlay() {
+    // ABSOLUTE PREVENTION: If overlay already exists, do not create another
+    if (this.captureWindow) {
+      console.log('❌ Capture overlay already exists, preventing duplicate');
+      return;
+    }
+    
     // Get primary display for global screen capture
     const primaryDisplay = screen.getPrimaryDisplay();
     
@@ -325,11 +333,38 @@ class App {
     // Handle window close
     this.captureWindow.on('closed', () => {
       this.captureWindow = null;
+      // Reset global shortcut flag when overlay is closed/cancelled
+      this.globalShortcutInProgress = false;
+      console.log('Capture overlay closed, flag reset');
     });
   }
 
   registerShortcuts() {
     globalShortcut.register('CommandOrControl+Shift+S', async () => {
+      const now = Date.now();
+      
+      // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
+      if (now - this.lastShortcutTime < 2000) {
+        console.log('Global shortcut on cooldown, ignoring');
+        return;
+      }
+      
+      // CRITICAL: Prevent duplicate shortcut executions
+      if (this.globalShortcutInProgress) {
+        console.log('Global shortcut in progress, ignoring');
+        return;
+      }
+      
+      // ADDITIONAL PROTECTION: Check if capture window already exists
+      if (this.captureWindow) {
+        console.log('Capture window exists, ignoring shortcut');
+        return;
+      }
+      
+      this.globalShortcutInProgress = true;
+      this.lastShortcutTime = now;
+      console.log('Global shortcut activated');
+      
       console.log('Global shortcut pressed - starting smart capture sequence...');
       
       try {
@@ -340,6 +375,8 @@ class App {
           // Now show the dialog since permission is actually needed
           const dialogResult = await this.checkScreenPermissions(true);
           if (!dialogResult) {
+            this.globalShortcutInProgress = false;
+            this.lastShortcutTime = 0;
             return;
           }
           
@@ -370,6 +407,8 @@ class App {
                 this.mainWindow.show();
                 this.mainWindow.focus();
               }
+              this.globalShortcutInProgress = false;
+              this.lastShortcutTime = 0;
               return;
             }
             
@@ -387,6 +426,8 @@ class App {
                 this.mainWindow.show();
                 this.mainWindow.focus();
               }
+              this.globalShortcutInProgress = false;
+              this.lastShortcutTime = 0;
               return;
             }
           }
@@ -424,11 +465,17 @@ class App {
         this.preCaptureScreenshot = preCapture;
         console.log('Pre-capture completed, creating overlay...');
         
-        // Step 5: Show overlay for selection
-        await this.startScreenCaptureWithoutPreCapture();
+        // Step 5: Show overlay for selection - with additional check
+        if (!this.captureWindow) {
+          await this.startScreenCaptureWithoutPreCapture();
+        } else {
+          console.log('❌ Capture window created during process, skipping overlay creation');
+        }
         
         // Mark that we've used capture successfully (for future runs)
         this.hasUsedCaptureSuccessfully = true;
+        
+        // DO NOT reset flag here - wait for actual capture completion or cancellation
         
       } catch (error) {
         console.error('Error in smart capture sequence:', error);
@@ -437,6 +484,10 @@ class App {
           this.mainWindow.show();
           this.mainWindow.focus();
         }
+        // Reset flag on error
+        this.globalShortcutInProgress = false;
+        this.lastShortcutTime = 0;
+        console.log('Global shortcut error, flag reset');
       }
     });
   }
@@ -450,15 +501,14 @@ class App {
       return await this.captureSelectedArea(bounds);
     });
 
-    ipcMain.handle('capture-selected-area', async (event, bounds) => {
-      return await this.captureSelectedArea(bounds);
-    });
-
     ipcMain.handle('close-capture-overlay', () => {
       if (this.captureWindow) {
         this.captureWindow.close();
         this.captureWindow = null;
       }
+      // Reset global shortcut flag when overlay is closed/cancelled
+      this.globalShortcutInProgress = false;
+      console.log('Capture overlay closed, flag reset');
     });
 
     ipcMain.handle('extract-and-translate', async (event, { imagePath, targetLanguage }) => {
@@ -744,6 +794,12 @@ class App {
       // Clean up pre-capture screenshot
       this.preCaptureScreenshot = null;
       
+      // Reset global shortcut flag when capture is fully complete
+      this.globalShortcutInProgress = false;
+      // Reset cooldown on successful completion to allow immediate next capture
+      this.lastShortcutTime = 0;
+      console.log('Capture completed successfully');
+      
       // ONLY NOW restore and focus the main window to show results
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         this.mainWindow.restore();
@@ -766,6 +822,12 @@ class App {
       
       // Clean up pre-capture screenshot on error
       this.preCaptureScreenshot = null;
+      
+      // Reset global shortcut flag on error
+      this.globalShortcutInProgress = false;
+      // Reset cooldown on error to allow retry
+      this.lastShortcutTime = 0;
+      console.log('Capture error, flag reset');
       
       // Restore window even on error to show error message
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {

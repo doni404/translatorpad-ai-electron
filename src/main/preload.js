@@ -6,7 +6,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Screenshot and capture
   startCapture: () => ipcRenderer.invoke('start-capture'),
   captureArea: (bounds) => ipcRenderer.invoke('capture-area', bounds),
-  captureSelectedArea: (bounds) => ipcRenderer.invoke('capture-selected-area', bounds),
   closeCaptureOverlay: () => ipcRenderer.invoke('close-capture-overlay'),
 
   // Vision and translation APIs
