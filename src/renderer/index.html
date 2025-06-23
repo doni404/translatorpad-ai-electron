@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G-Pad AI</title>
+    <link rel="stylesheet" href="styles/main.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <img src="../../assets/icons/gloding-logo.png" alt="G-Pad AI Logo" class="logo-img">
+                    <span>G-Pad AI</span>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <ul>
+                    <li class="nav-item active">
+                        <a href="#" class="nav-link" data-section="home">
+                            <i class="fas fa-home"></i>
+                            <span>Home</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#" class="nav-link" data-section="history">
+                            <i class="fas fa-clock-rotate-left"></i>
+                            <span>History</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#" class="nav-link" data-section="settings">
+                            <i class="fas fa-gear"></i>
+                            <span>Settings</span>
+                        </a>
+                    </li>
+                </ul>
+                
+                <div class="nav-divider"></div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-title">Quick Actions</div>
+                    <div class="quick-actions">
+                        <div class="quick-action" title="New Capture">
+                            <i class="fas fa-camera"></i>
+                        </div>
+                        <div class="quick-action" title="View Recent">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                        <div class="quick-action" title="Export All">
+                            <i class="fas fa-download"></i>
+                        </div>
+                    </div>
+                </div>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <button class="upgrade-btn" id="sidebarUpgradeBtn">
+                    <i class="fas fa-crown"></i>
+                    <span>Upgrade to Pro</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Home Section -->
+            <section id="home" class="section active">
+                <div class="section-header">
+                    <h2>Welcome to G-Pad AI</h2>
+                    <p>Gloding Pad AI - Advanced screenshot translation for macOS</p>
+                </div>
+                
+                <div class="welcome-content">
+                    <div class="feature-grid">
+                        <div class="feature-card">
+                            <div class="feature-icon">📸</div>
+                            <h3>Capture</h3>
+                            <p>Take screenshots with area selection</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🔍</div>
+                            <h3>Extract</h3>
+                            <p>AI-powered text recognition</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🌍</div>
+                            <h3>Translate</h3>
+                            <p>Support for 100+ languages</p>
+                        </div>
+                    </div>
+                    
+                    <div class="quick-start">
+                        <button id="captureBtn" class="btn btn-primary btn-large">
+                            <i class="fas fa-camera"></i>
+                            Start Capturing
+                        </button>
+                        <div class="shortcut-text">⌘+Shift+S</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- History Section -->
+            <section id="history" class="section">
+                <div class="section-header">
+                    <h2>Translation History</h2>
+                    <p>View and manage your previous translations</p>
+                </div>
+                
+                <div class="history-content">
+                    <div class="history-list" id="historyList">
+                        <div class="empty-state">
+                            <i class="fas fa-history"></i>
+                            <h3>No translations yet</h3>
+                            <p>Start capturing and translating to see your history here</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Settings Section -->
+            <section id="settings" class="section">
+                <div class="section-header">
+                    <h2>Settings</h2>
+                    <p>Customize your translation preferences</p>
+                </div>
+                
+                <div class="settings-content">
+                    <form id="settingsForm">
+                        <div class="settings-section">
+                            <h3>Translation Settings</h3>
+                            <div class="setting-item">
+                                <label for="defaultLanguage">Default Target Language</label>
+                                <select id="defaultLanguage" class="setting-select">
+                                    <option value="en">English</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="fr">French</option>
+                                    <option value="de">German</option>
+                                    <option value="ja" selected>Japanese</option>
+                                    <option value="ko">Korean</option>
+                                    <option value="zh-CN">Chinese (Simplified)</option>
+                                </select>
+                            </div>
+                            
+                            <div class="setting-item">
+                                <label for="autoDetect">Auto-detect source language</label>
+                                <input type="checkbox" id="autoDetect" class="setting-checkbox" checked>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-section">
+                            <h3>Capture Settings</h3>
+                            <div class="setting-item">
+                                <label for="captureQuality">Image Quality</label>
+                                <select id="captureQuality" class="setting-select">
+                                    <option value="high">High</option>
+                                    <option value="medium" selected>Medium</option>
+                                    <option value="low">Low</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-section">
+                            <h3>Google Cloud API</h3>
+                            <div class="setting-item">
+                                <label for="apiStatus">API Status</label>
+                                <div class="api-status" id="apiStatus">
+                                    <span class="status-indicator warning"></span>
+                                    <span>Not configured</span>
+                                </div>
+                            </div>
+                            <p class="api-help">
+                                To use this app, you need to set up Google Cloud Vision and Translate APIs. 
+                                <a href="#" id="apiSetupLink">Learn how to configure</a>
+                            </p>
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">Save Settings</button>
+                    </form>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <p id="loadingText">Processing...</p>
+        </div>
+    </div>
+
+    <!-- Results Modal -->
+    <div class="modal-overlay" id="resultsModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Translation Results</h2>
+                <button class="modal-close" id="closeModal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="result-section">
+                    <h3>Original Text</h3>
+                    <div class="text-box" id="originalText"></div>
+                </div>
+                <div class="result-section">
+                    <h3>Translated Text</h3>
+                    <div class="text-box" id="translatedText"></div>
+                </div>
+                <div class="language-selection">
+                    <label for="targetLanguageSelect">Change target language:</label>
+                    <select id="targetLanguageSelect" class="language-select">
+                        <!-- Languages will be populated dynamically -->
+                    </select>
+                    <button id="retranslateBtn" class="secondary-btn">Retranslate</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary-btn" id="saveTextBtn">
+                    <i class="fas fa-file-text"></i>
+                    Save as Text
+                </button>
+                <button class="primary-btn" id="saveImageBtn">
+                    <i class="fas fa-image"></i>
+                    Save as Image
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="scripts/main.js"></script>
+</body>
+</html> 
