@@ -862,6 +862,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Update the display
                         document.getElementById('translatedText').textContent = result.translatedText;
                         
+                        // Update the modal title with new language direction
+                        const modalHeader = document.querySelector('.modal-header h2');
+                        if (modalHeader && currentTranslation.detectedLanguage) {
+                            const detectedName = getLanguageName(currentTranslation.detectedLanguage);
+                            const targetName = getLanguageName(newTargetLanguage);
+                            modalHeader.textContent = `Translation Results (${detectedName} → ${targetName})`;
+                        }
+                        
                         // Update history
                         const historyIndex = translationHistory.findIndex(item => item.id === currentTranslation.id);
                         if (historyIndex >= 0) {
