@@ -53,11 +53,12 @@ temp/
 .Trashes
 ehthumbs.db
 Thumbs.db
+*/.DS_Store
 
 # Google Cloud credentials
-credentials/
+credentials/*.json
+!credentials/README.md
 google-cloud-key.json
-*.json
 
 # Logs
 logs

@@ -24,6 +24,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     });
   },
 
+  // Toast message listener
+  onShowToast: (callback) => {
+    ipcRenderer.on('show-toast', (event, data) => {
+      callback(data);
+    });
+  },
+
   // Remove listeners
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners();

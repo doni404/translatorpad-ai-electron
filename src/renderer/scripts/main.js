@@ -81,6 +81,13 @@ function setupEventListeners() {
     window.electronAPI.onCaptureComplete((result) => {
         handleCaptureComplete(result);
     });
+
+    // Listen for toast messages from main process
+    if (window.electronAPI.onShowToast) {
+        window.electronAPI.onShowToast((data) => {
+            showToast(data.message, data.type);
+        });
+    }
 }
 
 // Navigation between sections

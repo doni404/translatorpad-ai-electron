@@ -18,11 +18,14 @@ class App {
   }
 
   init() {
+    // Set app name for proper branding
+    app.setName('G-Pad AI');
+    
     app.whenReady().then(() => {
       this.createMainWindow();
       this.registerShortcuts();
       this.setupIpcHandlers();
-      this.checkScreenPermissions();
+      // Don't check permissions on startup - only when actually needed
     });
 
     app.on('window-all-closed', () => {
@@ -44,6 +47,7 @@ class App {
       height: 800,
       minWidth: 800,
       minHeight: 600,
+      title: 'G-Pad AI',
       titleBarStyle: 'default',
       movable: true,
       webPreferences: {
@@ -52,7 +56,7 @@ class App {
         enableRemoteModule: false,
         preload: path.join(__dirname, 'preload.js')
       },
-      icon: path.join(__dirname, '../../assets/icons/icon.png')
+      icon: path.join(__dirname, '../../assets/icons/gloding-logo.png')
     });
 
     this.mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -329,21 +333,66 @@ class App {
       console.log('Global shortcut pressed - starting smart capture sequence...');
       
       try {
-        // Check permissions first
-        const hasPermission = await this.checkScreenPermissions();
+        // Check permissions silently first
+        const hasPermission = await this.checkScreenPermissions(false);
         if (!hasPermission) {
-          console.log('Screen recording permission denied, aborting capture');
-          return;
+          console.log('Screen recording permission needed, showing permission dialog...');
+          // Now show the dialog since permission is actually needed
+          const dialogResult = await this.checkScreenPermissions(true);
+          if (!dialogResult) {
+            return;
+          }
+          
+          // If permission was "not-determined", we need to trigger the system dialog
+          const initialStatus = systemPreferences.getMediaAccessStatus('screen');
+          if (initialStatus === 'not-determined') {
+            console.log('Triggering system permission dialog...');
+            
+            // Ensure main window is visible to show toast messages
+            if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+              this.mainWindow.show();
+              this.mainWindow.focus();
+            }
+            
+            // Take a quick screenshot to trigger the system permission dialog
+            try {
+              await this.screenshotService.captureFullScreen();
+            } catch (error) {
+              console.log('Screenshot attempt triggered permission dialog (expected)');
+            }
+            
+            // Wait for user to grant permission
+            const permissionGranted = await this.waitForScreenPermission();
+            if (!permissionGranted) {
+              console.log('Permission denied via global shortcut');
+              // Keep main window visible on permission denial
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.show();
+                this.mainWindow.focus();
+              }
+              return;
+            }
+            
+            // IMPORTANT: Permission was just granted, so we need to verify it's actually working
+            // Wait a moment for the system to fully apply the permission
+            console.log('Permission granted, verifying...');
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Double-check permission status
+            const finalStatus = systemPreferences.getMediaAccessStatus('screen');
+            if (finalStatus !== 'granted') {
+              console.log('Permission verification failed:', finalStatus);
+              // Keep main window visible on permission issue
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.show();
+                this.mainWindow.focus();
+              }
+              return;
+            }
+          }
         }
         
-        // Additional check for first-time permission dialog
-        // On first use, macOS may show a system dialog even if permission check passes
-        const isFirstTimeUse = !this.hasUsedCaptureSuccessfully;
-        if (isFirstTimeUse) {
-          console.log('First time capture - allowing extra time for system dialogs...');
-          // Wait longer to ensure any system dialogs are handled
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
+        console.log('Permission check passed, proceeding with capture...');
         
         // NEW STRATEGY: Use system APIs to properly handle window switching
         
@@ -502,33 +551,112 @@ class App {
 
   async startScreenCapture() {
     try {
+      // Check permissions silently first when called from UI
+      const hasPermission = await this.checkScreenPermissions(false);
+      if (!hasPermission) {
+        console.log('Screen recording permission needed, showing permission dialog...');
+        // Show the dialog since permission is actually needed
+        const dialogResult = await this.checkScreenPermissions(true);
+        if (!dialogResult) {
+          return { success: false, error: 'Screen recording permission required' };
+        }
+        
+        // If permission was "not-determined", we need to trigger the system dialog
+        // by attempting a capture, then wait for user response
+        const initialStatus = systemPreferences.getMediaAccessStatus('screen');
+        if (initialStatus === 'not-determined') {
+          console.log('Triggering system permission dialog...');
+          
+          // Ensure main window is visible to show toast messages
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.show();
+            this.mainWindow.focus();
+          }
+          
+          // Take a quick screenshot to trigger the system permission dialog
+          try {
+            await this.screenshotService.captureFullScreen();
+          } catch (error) {
+            console.log('Screenshot attempt triggered permission dialog (expected)');
+          }
+          
+          // Wait for user to grant permission
+          const permissionGranted = await this.waitForScreenPermission();
+          if (!permissionGranted) {
+            // Keep main window visible on permission denial
+            if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+              this.mainWindow.show();
+              this.mainWindow.focus();
+            }
+            return { success: false, error: 'Screen recording permission was denied' };
+          }
+          
+          // IMPORTANT: Permission was just granted, so we need to verify it's actually working
+          // Wait a moment for the system to fully apply the permission
+          console.log('Permission granted, verifying...');
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          // Double-check permission status
+          const finalStatus = systemPreferences.getMediaAccessStatus('screen');
+          if (finalStatus !== 'granted') {
+            console.log('Permission verification failed:', finalStatus);
+            return { success: false, error: 'Screen recording permission was not properly granted. Please restart the app.' };
+          }
+        }
+      }
+
+      console.log('UI capture button pressed - using smart capture strategy...');
+
+      // Use the same strategy as global shortcut for consistent behavior
+      // Step 1: Get the current frontmost app before we interfere
+      const frontmostApp = await this.getFrontmostApplication();
+      console.log('Frontmost app detected:', frontmostApp);
+      
+      // Step 2: Hide G-Pad AI completely (not just minimize)
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.hide();
+      }
+      
+      // Step 3: If the frontmost app wasn't G-Pad AI, try to restore it
+      if (frontmostApp && frontmostApp !== 'G-Pad AI' && frontmostApp !== 'Electron') {
+        console.log(`Attempting to restore ${frontmostApp}...`);
+        await this.restoreFrontmostApp(frontmostApp);
+        
+        // Wait for the app to redraw
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } else {
+        // If G-Pad AI was frontmost, just wait for desktop
+        console.log('G-Pad AI was frontmost, waiting for desktop...');
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+
+      // Step 4: Take background screenshot (like global shortcut)
+      console.log('Taking background screenshot for UI capture...');
+      const preCapture = await this.screenshotService.captureFullScreenBackground();
+      this.preCaptureScreenshot = preCapture;
+
       // If capture window already exists, close it first
       if (this.captureWindow) {
         this.captureWindow.close();
         this.captureWindow = null;
       }
 
-      // If this is called from the UI (not global shortcut), take pre-capture here
-      if (!this.preCaptureScreenshot) {
-        console.log('Taking pre-capture screenshot of current screen state...');
-        const preCapture = await this.screenshotService.captureFullScreen();
-        this.preCaptureScreenshot = preCapture;
-      }
-      
-      // Minimize main window to prevent interference with global capture
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.minimize();
-      }
-
       // Small delay to ensure any existing window is fully closed
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Create the transparent overlay for global area selection
+      // Step 5: Create the transparent overlay for global area selection
       this.createCaptureOverlay();
       
       return { success: true };
     } catch (error) {
       console.error('Error starting screen capture:', error);
+      
+      // On error, restore the main window
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.show();
+        this.mainWindow.focus();
+      }
+      
       return { success: false, error: error.message };
     }
   }
@@ -698,40 +826,118 @@ class App {
     }
   }
 
-  async checkScreenPermissions() {
+  async waitForScreenPermission() {
+    // Helper function to wait for permission to be actually granted
+    console.log('Waiting for screen recording permission confirmation...');
+    
+    const maxAttempts = 15; // Wait up to 15 seconds (increased from 10)
+    for (let i = 0; i < maxAttempts; i++) {
+      const status = systemPreferences.getMediaAccessStatus('screen');
+      console.log(`Permission check attempt ${i + 1}: ${status}`);
+      
+      if (status === 'granted') {
+        console.log('✅ Screen recording permission confirmed');
+        return true;
+      }
+      
+      if (status === 'denied' || status === 'restricted') {
+        console.log('❌ Screen recording permission denied');
+        return false;
+      }
+      
+      // Show helpful toast after 2 seconds if permission dialog might be blocked
+      if (i === 1) {
+        this.showPermissionToast('📋 macOS permission dialog is showing. Look for it and click "Allow"');
+      }
+      
+      // Show warning toast after 5 seconds if still waiting
+      if (i === 4) {
+        this.showPermissionToast('⚠️ Still waiting for permission. The dialog may be hidden behind other windows or blocked by the overlay');
+      }
+      
+      // Show urgent toast after 10 seconds
+      if (i === 9) {
+        this.showPermissionToast('❌ Permission dialog may be blocked. Try pressing ESC to cancel, then restart the app and try again');
+      }
+      
+      // Wait 1 second before checking again
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    console.log('⏰ Timeout waiting for permission confirmation');
+    this.showPermissionToast('❌ Permission timeout. The dialog may have been blocked. Please restart the app and try again.');
+    return false;
+  }
+
+  showPermissionToast(message) {
+    // Send toast message to renderer if main window exists
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('show-toast', {
+        message: message,
+        type: 'warning',
+        duration: 4000
+      });
+    }
+  }
+
+  async checkScreenPermissions(showDialog = true) {
     try {
       if (process.platform === 'darwin') {
         console.log('Checking macOS screen recording permissions...');
         
         // Check if we have screen recording permission
-        const hasPermission = systemPreferences.getMediaAccessStatus('screen');
+        let hasPermission = systemPreferences.getMediaAccessStatus('screen');
         console.log('Screen recording permission status:', hasPermission);
         
+        // Handle the "not-determined" case where macOS will show permission dialog
+        if (hasPermission === 'not-determined') {
+          console.log('Permission not determined - will trigger system dialog on capture attempt');
+          
+          if (showDialog) {
+            const result = await dialog.showMessageBox(this.mainWindow, {
+              type: 'info',
+              title: 'Screen Recording Permission Required',
+              message: 'G-Pad AI needs screen recording permission to capture screenshots.',
+              detail: 'When you proceed, macOS will show a permission dialog. Please click "Allow" to grant access.\n\nNote: The permission dialog may appear behind other windows - please look for it.',
+              buttons: ['Proceed', 'Cancel'],
+              defaultId: 0
+            });
+            
+            if (result.response !== 0) {
+              return false; // User cancelled
+            }
+            
+            // User chose to proceed - return true to trigger the system dialog
+            return true;
+          }
+          
+          // For silent checks, return true as permission will be requested when needed
+          return true;
+        }
+        
         if (hasPermission !== 'granted') {
-          console.log('Screen recording permission not granted, requesting...');
+          console.log('Screen recording permission not granted, status:', hasPermission);
           
-          // Show dialog to user about permissions
-          const result = await dialog.showMessageBox(this.mainWindow, {
-            type: 'warning',
-            title: 'Screen Recording Permission Required',
-            message: 'G-Pad AI needs screen recording permission to capture screenshots from other applications.',
-            detail: 'Please grant permission in System Preferences > Security & Privacy > Privacy > Screen Recording, then restart the app.',
-            buttons: ['Open System Preferences', 'Cancel'],
-            defaultId: 0
-          });
-          
-          if (result.response === 0) {
-            // Open System Preferences
-            const { exec } = require('child_process');
-            exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"');
+          // Only show dialog if explicitly requested
+          if (showDialog) {
+            // For denied/restricted permissions, user must manually grant
+            const result = await dialog.showMessageBox(this.mainWindow, {
+              type: 'warning',
+              title: 'Screen Recording Permission Required',
+              message: 'G-Pad AI needs screen recording permission to capture screenshots from other applications.',
+              detail: 'Please grant permission in System Preferences > Security & Privacy > Privacy > Screen Recording, then restart the app.\n\nNote: You may need to restart G-Pad AI after granting permission.',
+              buttons: ['Open System Preferences', 'Cancel'],
+              defaultId: 0
+            });
+            
+            if (result.response === 0) {
+              // Open System Preferences to Screen Recording section
+              const { exec } = require('child_process');
+              exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"');
+            }
           }
           
           return false;
-        }
-        
-        // Even if permission is granted, on first use macOS might still show a system dialog
-        if (hasPermission === 'granted' && !this.hasUsedCaptureSuccessfully) {
-          console.log('Permission granted, but first use may trigger system dialog');
         }
         
         console.log('Screen recording permission granted ✅');

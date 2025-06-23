@@ -2,16 +2,35 @@ const { desktopCapturer, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
+const os = require('os');
+const { app } = require('electron');
 
 class ScreenshotService {
   constructor() {
-    this.tempDir = path.join(__dirname, '../../../temp');
+    // Use system temp directory instead of app directory
+    this.tempDir = path.join(os.tmpdir(), 'g-pad-ai-screenshots');
     this.ensureTempDir();
   }
 
   ensureTempDir() {
-    if (!fs.existsSync(this.tempDir)) {
-      fs.mkdirSync(this.tempDir, { recursive: true });
+    try {
+      if (!fs.existsSync(this.tempDir)) {
+        fs.mkdirSync(this.tempDir, { recursive: true });
+        console.log('Created temp directory:', this.tempDir);
+      }
+    } catch (error) {
+      console.error('Error creating temp directory:', error);
+      // Fallback to user data directory if system temp fails
+      try {
+        this.tempDir = path.join(app.getPath('userData'), 'temp');
+        if (!fs.existsSync(this.tempDir)) {
+          fs.mkdirSync(this.tempDir, { recursive: true });
+          console.log('Created fallback temp directory:', this.tempDir);
+        }
+      } catch (fallbackError) {
+        console.error('Error creating fallback temp directory:', fallbackError);
+        throw new Error('Cannot create temp directory for screenshots');
+      }
     }
   }
 
