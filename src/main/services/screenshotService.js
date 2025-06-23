@@ -56,6 +56,58 @@ class ScreenshotService {
     }
   }
 
+  async captureFullScreenBackground() {
+    try {
+      console.log('Taking background screenshot without window focus...');
+      
+      // Get all displays and use the primary one
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.bounds;
+      
+      // Use a higher resolution for better quality
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: width * 2, height: height * 2 },
+        fetchWindowIcons: false
+      });
+
+      if (sources.length === 0) {
+        throw new Error('No screen sources found for background capture');
+      }
+
+      // Find the primary display source
+      const source = sources.find(s => s.display_id === primaryDisplay.id.toString()) || sources[0];
+      
+      console.log('Background capture source found:', {
+        name: source.name,
+        displayId: source.display_id,
+        size: source.thumbnail.getSize()
+      });
+      
+      const screenshot = source.thumbnail.toPNG();
+      const timestamp = Date.now();
+      const filePath = path.join(this.tempDir, `bg_fullscreen_${timestamp}.png`);
+      
+      fs.writeFileSync(filePath, screenshot);
+      
+      // Return base64 data for inline capture
+      const base64Data = source.thumbnail.toDataURL().replace(/^data:image\/png;base64,/, '');
+      
+      console.log('Background screenshot completed:', filePath);
+      
+      return {
+        screenshot: base64Data, // This matches what main.js expects
+        dataURL: source.thumbnail.toDataURL(),
+        filePath: filePath,
+        width: source.thumbnail.getSize().width,
+        height: source.thumbnail.getSize().height
+      };
+    } catch (error) {
+      console.error('Error capturing background screenshot:', error);
+      throw error;
+    }
+  }
+
   async captureArea(bounds) {
     try {
       // Validate bounds
@@ -63,16 +115,16 @@ class ScreenshotService {
         throw new Error('Invalid bounds object');
       }
       
-      let { x, y, width, height, windowX, windowY, windowWidth, windowHeight, rawLeft, rawTop } = bounds;
+      console.log('Original bounds received:', bounds);
       
-      // Use raw coordinates if available (these are the actual overlay coordinates)
+      // Extract coordinates - these are now global screen coordinates
+      let { x, y, width, height, rawLeft, rawTop, displayBounds, scalingRatio } = bounds;
+      
+      // Use raw coordinates if available (these are direct from the overlay)
       if (rawLeft !== undefined && rawTop !== undefined) {
-        console.log('Using raw overlay coordinates for exact matching');
+        console.log('Using raw overlay coordinates for global capture');
         x = rawLeft;
         y = rawTop;
-        // Width and height from the pre-scaled values but convert back
-        width = Math.round(width / 2); // Convert back from scaled
-        height = Math.round(height / 2); // Convert back from scaled
         console.log('Raw coordinates:', { x, y, width, height });
       }
       
@@ -82,10 +134,9 @@ class ScreenshotService {
       width = Math.max(1, Math.floor(Number(width) || 1));
       height = Math.max(1, Math.floor(Number(height) || 1));
       
-      console.log('Original bounds received:', bounds);
       console.log('Capturing area with bounds:', { x, y, width, height });
       
-      // Get display information for better coordinate handling
+      // Get display information
       const { screen } = require('electron');
       const primaryDisplay = screen.getPrimaryDisplay();
       const scaleFactor = primaryDisplay.scaleFactor || 1;
@@ -118,88 +169,50 @@ class ScreenshotService {
       
       console.log('Scaling ratios:', { widthRatio, heightRatio, displayWidth, displayHeight });
       
-      // Dynamic coordinate correction based on window positioning
-      let correctedX = x;
-      let correctedY = y;
+      // Global coordinate system - apply scaling directly
+      console.log('=== GLOBAL COORDINATE PROCESSING ===');
+      console.log('Input coordinates (logical pixels):', { x, y, width, height });
       
-      // If window positioning data is available, use it for dynamic correction
-      if (windowX !== undefined && windowY !== undefined && windowWidth !== undefined && windowHeight !== undefined) {
-        console.log('=== DYNAMIC COORDINATE CORRECTION ===');
-        console.log('Window data:', { windowX, windowY, windowWidth, windowHeight });
-        console.log('Raw selection coordinates:', { x, y, width, height });
-        
-        // Apply proper device pixel ratio scaling
-        // The coordinates from overlay are in logical pixels, need to convert to physical pixels
-        correctedX = Math.round(x * scaleFactor);
-        correctedY = Math.round(y * scaleFactor);
-        width = Math.round(width * scaleFactor);
-        height = Math.round(height * scaleFactor);
-        
-        // Dynamic Y coordinate correction based on window positioning
-        // The overlay window has windowY offset (usually 25px for macOS menu bar)
-        // We need to account for this offset in the coordinate system
-        const overlayYOffset = windowY; // This is the menu bar offset
-        const coordinateSystemOffset = overlayYOffset * scaleFactor; // Scale the offset
-        
-        // Apply the dynamic offset correction
-        correctedY = correctedY + coordinateSystemOffset;
-        
-        console.log('After device pixel ratio scaling:', { x: correctedX, y: correctedY, width, height });
-        console.log('Applied scaling factor:', scaleFactor);
-        console.log('Dynamic Y offset applied:', coordinateSystemOffset, '(window offset:', overlayYOffset, '× scale factor:', scaleFactor, ')');
-        console.log('=== END DYNAMIC CORRECTION ===');
-      } else {
-        // Fallback: apply scaling correction if window data not available
-        console.log('Using fallback coordinate correction');
-        if (Math.abs(widthRatio - scaleFactor) > 0.1 || Math.abs(heightRatio - scaleFactor) > 0.1) {
-          correctedX = Math.round(x * (widthRatio / scaleFactor));
-          correctedY = Math.round(y * (heightRatio / scaleFactor));
-          width = Math.round(width * (widthRatio / scaleFactor));
-          height = Math.round(height * (heightRatio / scaleFactor));
-        }
-      }
+      // Apply device pixel ratio scaling for Retina displays
+      const finalX = Math.round(x * scaleFactor);
+      const finalY = Math.round(y * scaleFactor);
+      const finalWidth = Math.round(width * scaleFactor);
+      const finalHeight = Math.round(height * scaleFactor);
       
-      // Final coordinate assignment
-      x = correctedX;
-      y = correctedY;
+      console.log('After scaling:', { x: finalX, y: finalY, width: finalWidth, height: finalHeight });
+      console.log('Scale factor applied:', scaleFactor);
+      console.log('=== END GLOBAL PROCESSING ===');
       
       // Ensure bounds are within screenshot dimensions
-      if (x >= maxWidth || y >= maxHeight) {
-        console.warn(`Bounds may be out of range: x=${x}, y=${y}, max=${maxWidth}x${maxHeight}`);
+      if (finalX >= maxWidth || finalY >= maxHeight) {
+        console.warn(`Bounds may be out of range: x=${finalX}, y=${finalY}, max=${maxWidth}x${maxHeight}`);
       }
       
-      // Adjust width and height if they exceed boundaries
-      width = Math.min(width, maxWidth - x);
-      height = Math.min(height, maxHeight - y);
+      // Adjust dimensions if they exceed boundaries
+      const adjustedWidth = Math.min(finalWidth, maxWidth - finalX);
+      const adjustedHeight = Math.min(finalHeight, maxHeight - finalY);
       
       // Final validation
-      if (x + width > maxWidth) {
-        width = maxWidth - x;
-      }
-      if (y + height > maxHeight) {
-        height = maxHeight - y;
-      }
+      const safeX = Math.max(0, Math.min(finalX, maxWidth - 1));
+      const safeY = Math.max(0, Math.min(finalY, maxHeight - 1));
+      const safeWidth = Math.max(1, Math.min(adjustedWidth, maxWidth - safeX));
+      const safeHeight = Math.max(1, Math.min(adjustedHeight, maxHeight - safeY));
       
-      // Ensure minimum size
-      width = Math.max(1, width);
-      height = Math.max(1, height);
-      
-      console.log('Final adjusted bounds:', { x, y, width, height });
+      console.log('Final adjusted bounds:', { x: safeX, y: safeY, width: safeWidth, height: safeHeight });
       
       const timestamp = Date.now();
       const outputPath = path.join(this.tempDir, `capture_${timestamp}.png`);
       
       await sharp(fullScreenshot.filePath)
         .extract({
-          left: x,
-          top: y,
-          width: width,
-          height: height
+          left: safeX,
+          top: safeY,
+          width: safeWidth,
+          height: safeHeight
         })
         .png()
         .toFile(outputPath);
       
-      // Verify the output file was created and get its info
       const outputInfo = await sharp(outputPath).metadata();
       console.log('Output image info:', {
         width: outputInfo.width,
@@ -207,15 +220,138 @@ class ScreenshotService {
         path: outputPath
       });
       
-      // Clean up the temporary full screenshot
-      if (fs.existsSync(fullScreenshot.filePath)) {
-        fs.unlinkSync(fullScreenshot.filePath);
-      }
-      
       console.log('Successfully captured area to:', outputPath);
       return outputPath;
+      
     } catch (error) {
       console.error('Error capturing area:', error);
+      throw error;
+    }
+  }
+
+  async captureAreaFromExisting(bounds, existingScreenshotPath) {
+    try {
+      // Validate bounds
+      if (!bounds || typeof bounds !== 'object') {
+        throw new Error('Invalid bounds object');
+      }
+      
+      if (!existingScreenshotPath || !fs.existsSync(existingScreenshotPath)) {
+        throw new Error('Invalid or missing existing screenshot path');
+      }
+      
+      console.log('Capturing area from existing screenshot:', existingScreenshotPath);
+      console.log('Original bounds received:', bounds);
+      
+      // Extract coordinates - these are now global screen coordinates
+      let { x, y, width, height, rawLeft, rawTop, displayBounds, scalingRatio } = bounds;
+      
+      // Use raw coordinates if available (these are direct from the overlay)
+      if (rawLeft !== undefined && rawTop !== undefined) {
+        console.log('Using raw overlay coordinates for pre-captured screenshot');
+        x = rawLeft;
+        y = rawTop;
+        console.log('Raw coordinates:', { x, y, width, height });
+      }
+      
+      // Ensure all values are numbers and within reasonable limits
+      x = Math.max(0, Math.floor(Number(x) || 0));
+      y = Math.max(0, Math.floor(Number(y) || 0));
+      width = Math.max(1, Math.floor(Number(width) || 1));
+      height = Math.max(1, Math.floor(Number(height) || 1));
+      
+      console.log('Processing area with bounds:', { x, y, width, height });
+      
+      // Get display information
+      const { screen } = require('electron');
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const scaleFactor = primaryDisplay.scaleFactor || 1;
+      
+      console.log('Display info:', {
+        bounds: primaryDisplay.bounds,
+        scaleFactor: scaleFactor,
+        workArea: primaryDisplay.workArea
+      });
+      
+      // Get existing screenshot dimensions
+      const screenshotInfo = await sharp(existingScreenshotPath).metadata();
+      const maxWidth = screenshotInfo.width;
+      const maxHeight = screenshotInfo.height;
+      
+      console.log('Existing screenshot info:', {
+        width: maxWidth,
+        height: maxHeight,
+        filePath: existingScreenshotPath
+      });
+      
+      // Apply device pixel ratio scaling for Retina displays
+      console.log('=== PRE-CAPTURED COORDINATE PROCESSING ===');
+      console.log('Input coordinates (logical pixels):', { x, y, width, height });
+      
+      // Apply device pixel ratio scaling for Retina displays
+      let finalX = Math.round(x * scaleFactor);
+      let finalY = Math.round(y * scaleFactor);
+      let finalWidth = Math.round(width * scaleFactor);
+      let finalHeight = Math.round(height * scaleFactor);
+      
+      // COORDINATE ALIGNMENT FIX: Add Y-offset adjustment for better alignment
+      // The selection overlay and actual screenshot may have slight coordinate differences
+      // User reported selection box needs to be lower, so we adjust capture area down
+      const yOffsetCorrection = 50; // Positive value moves capture area down to match selection box
+      finalY += yOffsetCorrection;
+      
+      console.log('After scaling and alignment:', { 
+        x: finalX, 
+        y: finalY, 
+        width: finalWidth, 
+        height: finalHeight,
+        yOffset: yOffsetCorrection
+      });
+      console.log('Scale factor applied:', scaleFactor);
+      console.log('=== END PRE-CAPTURED PROCESSING ===');
+      
+      // Ensure bounds are within screenshot dimensions
+      if (finalX >= maxWidth || finalY >= maxHeight) {
+        console.warn(`Bounds may be out of range: x=${finalX}, y=${finalY}, max=${maxWidth}x${maxHeight}`);
+      }
+      
+      // Adjust dimensions if they exceed boundaries
+      const adjustedWidth = Math.min(finalWidth, maxWidth - finalX);
+      const adjustedHeight = Math.min(finalHeight, maxHeight - finalY);
+      
+      // Final validation
+      const safeX = Math.max(0, Math.min(finalX, maxWidth - 1));
+      const safeY = Math.max(0, Math.min(finalY, maxHeight - 1));
+      const safeWidth = Math.max(1, Math.min(adjustedWidth, maxWidth - safeX));
+      const safeHeight = Math.max(1, Math.min(adjustedHeight, maxHeight - safeY));
+      
+      console.log('Final adjusted bounds for pre-captured:', { x: safeX, y: safeY, width: safeWidth, height: safeHeight });
+      
+      const timestamp = Date.now();
+      const outputPath = path.join(this.tempDir, `capture_precap_${timestamp}.png`);
+      
+      await sharp(existingScreenshotPath)
+        .extract({
+          left: safeX,
+          top: safeY,
+          width: safeWidth,
+          height: safeHeight
+        })
+        .png()
+        .toFile(outputPath);
+      
+      const outputInfo = await sharp(outputPath).metadata();
+      console.log('Pre-captured output image info:', {
+        width: outputInfo.width,
+        height: outputInfo.height,
+        path: outputPath
+      });
+      
+      console.log('Successfully captured area from pre-captured screenshot to:', outputPath);
+      return outputPath;
+      
+    } catch (error) {
+      console.error('Error capturing area from existing screenshot:', error);
       throw error;
     }
   }
