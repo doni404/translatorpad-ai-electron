@@ -6,8 +6,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Screenshot and capture
   startCapture: () => ipcRenderer.invoke('start-capture'),
   captureArea: (bounds) => ipcRenderer.invoke('capture-area', bounds),
-  captureSelectedArea: (bounds) => ipcRenderer.invoke('capture-selected-area', bounds),
   closeCaptureOverlay: () => ipcRenderer.invoke('close-capture-overlay'),
+  captureLupArea: () => ipcRenderer.invoke('capture-lup-area'),
+  resetLupCapture: () => ipcRenderer.invoke('reset-lup-capture'),
+  openInApp: () => ipcRenderer.invoke('open-in-app'),
 
   // Vision and translation APIs
   extractAndTranslate: (data) => ipcRenderer.invoke('extract-and-translate', data),
@@ -21,6 +23,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onCaptureComplete: (callback) => {
     ipcRenderer.on('capture-complete', (event, result) => {
       callback(result);
+    });
+  },
+
+  onLupResult: (callback) => {
+    ipcRenderer.on('lup-result', (event, imagePath) => {
+      callback(imagePath);
+    });
+  },
+
+  // Toast message listener
+  onShowToast: (callback) => {
+    ipcRenderer.on('show-toast', (event, data) => {
+      callback(data);
     });
   },
 

@@ -2,16 +2,39 @@ const { desktopCapturer, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
+const os = require('os');
+const { app } = require('electron');
+const { TranslationService } = require('./translationService');
 
 class ScreenshotService {
   constructor() {
-    this.tempDir = path.join(__dirname, '../../../temp');
+    // Use system temp directory instead of app directory
+    this.tempDir = path.join(os.tmpdir(), 'g-pad-ai-screenshots');
     this.ensureTempDir();
+    
+    // Initialize translation service for individual paragraph translation
+    this.translationService = new TranslationService();
   }
 
   ensureTempDir() {
-    if (!fs.existsSync(this.tempDir)) {
-      fs.mkdirSync(this.tempDir, { recursive: true });
+    try {
+      if (!fs.existsSync(this.tempDir)) {
+        fs.mkdirSync(this.tempDir, { recursive: true });
+        console.log('Created temp directory:', this.tempDir);
+      }
+    } catch (error) {
+      console.error('Error creating temp directory:', error);
+      // Fallback to user data directory if system temp fails
+      try {
+        this.tempDir = path.join(app.getPath('userData'), 'temp');
+        if (!fs.existsSync(this.tempDir)) {
+          fs.mkdirSync(this.tempDir, { recursive: true });
+          console.log('Created fallback temp directory:', this.tempDir);
+        }
+      } catch (fallbackError) {
+        console.error('Error creating fallback temp directory:', fallbackError);
+        throw new Error('Cannot create temp directory for screenshots');
+      }
     }
   }
 
@@ -56,6 +79,58 @@ class ScreenshotService {
     }
   }
 
+  async captureFullScreenBackground() {
+    try {
+      console.log('Taking background screenshot without window focus...');
+      
+      // Get all displays and use the primary one
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.bounds;
+      
+      // Use a higher resolution for better quality
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: width * 2, height: height * 2 },
+        fetchWindowIcons: false
+      });
+
+      if (sources.length === 0) {
+        throw new Error('No screen sources found for background capture');
+      }
+
+      // Find the primary display source
+      const source = sources.find(s => s.display_id === primaryDisplay.id.toString()) || sources[0];
+      
+      console.log('Background capture source found:', {
+        name: source.name,
+        displayId: source.display_id,
+        size: source.thumbnail.getSize()
+      });
+      
+      const screenshot = source.thumbnail.toPNG();
+      const timestamp = Date.now();
+      const filePath = path.join(this.tempDir, `bg_fullscreen_${timestamp}.png`);
+      
+      fs.writeFileSync(filePath, screenshot);
+      
+      // Return base64 data for inline capture
+      const base64Data = source.thumbnail.toDataURL().replace(/^data:image\/png;base64,/, '');
+      
+      console.log('Background screenshot completed:', filePath);
+      
+      return {
+        screenshot: base64Data, // This matches what main.js expects
+        dataURL: source.thumbnail.toDataURL(),
+        filePath: filePath,
+        width: source.thumbnail.getSize().width,
+        height: source.thumbnail.getSize().height
+      };
+    } catch (error) {
+      console.error('Error capturing background screenshot:', error);
+      throw error;
+    }
+  }
+
   async captureArea(bounds) {
     try {
       // Validate bounds
@@ -63,16 +138,16 @@ class ScreenshotService {
         throw new Error('Invalid bounds object');
       }
       
-      let { x, y, width, height, windowX, windowY, windowWidth, windowHeight, rawLeft, rawTop } = bounds;
+      console.log('Original bounds received:', bounds);
       
-      // Use raw coordinates if available (these are the actual overlay coordinates)
+      // Extract coordinates - these are now global screen coordinates
+      let { x, y, width, height, rawLeft, rawTop, displayBounds, scalingRatio } = bounds;
+      
+      // Use raw coordinates if available (these are direct from the overlay)
       if (rawLeft !== undefined && rawTop !== undefined) {
-        console.log('Using raw overlay coordinates for exact matching');
+        console.log('Using raw overlay coordinates for global capture');
         x = rawLeft;
         y = rawTop;
-        // Width and height from the pre-scaled values but convert back
-        width = Math.round(width / 2); // Convert back from scaled
-        height = Math.round(height / 2); // Convert back from scaled
         console.log('Raw coordinates:', { x, y, width, height });
       }
       
@@ -82,10 +157,9 @@ class ScreenshotService {
       width = Math.max(1, Math.floor(Number(width) || 1));
       height = Math.max(1, Math.floor(Number(height) || 1));
       
-      console.log('Original bounds received:', bounds);
       console.log('Capturing area with bounds:', { x, y, width, height });
       
-      // Get display information for better coordinate handling
+      // Get display information
       const { screen } = require('electron');
       const primaryDisplay = screen.getPrimaryDisplay();
       const scaleFactor = primaryDisplay.scaleFactor || 1;
@@ -118,88 +192,50 @@ class ScreenshotService {
       
       console.log('Scaling ratios:', { widthRatio, heightRatio, displayWidth, displayHeight });
       
-      // Dynamic coordinate correction based on window positioning
-      let correctedX = x;
-      let correctedY = y;
+      // Global coordinate system - apply scaling directly
+      console.log('=== GLOBAL COORDINATE PROCESSING ===');
+      console.log('Input coordinates (logical pixels):', { x, y, width, height });
       
-      // If window positioning data is available, use it for dynamic correction
-      if (windowX !== undefined && windowY !== undefined && windowWidth !== undefined && windowHeight !== undefined) {
-        console.log('=== DYNAMIC COORDINATE CORRECTION ===');
-        console.log('Window data:', { windowX, windowY, windowWidth, windowHeight });
-        console.log('Raw selection coordinates:', { x, y, width, height });
-        
-        // Apply proper device pixel ratio scaling
-        // The coordinates from overlay are in logical pixels, need to convert to physical pixels
-        correctedX = Math.round(x * scaleFactor);
-        correctedY = Math.round(y * scaleFactor);
-        width = Math.round(width * scaleFactor);
-        height = Math.round(height * scaleFactor);
-        
-        // Dynamic Y coordinate correction based on window positioning
-        // The overlay window has windowY offset (usually 25px for macOS menu bar)
-        // We need to account for this offset in the coordinate system
-        const overlayYOffset = windowY; // This is the menu bar offset
-        const coordinateSystemOffset = overlayYOffset * scaleFactor; // Scale the offset
-        
-        // Apply the dynamic offset correction
-        correctedY = correctedY + coordinateSystemOffset;
-        
-        console.log('After device pixel ratio scaling:', { x: correctedX, y: correctedY, width, height });
-        console.log('Applied scaling factor:', scaleFactor);
-        console.log('Dynamic Y offset applied:', coordinateSystemOffset, '(window offset:', overlayYOffset, '× scale factor:', scaleFactor, ')');
-        console.log('=== END DYNAMIC CORRECTION ===');
-      } else {
-        // Fallback: apply scaling correction if window data not available
-        console.log('Using fallback coordinate correction');
-        if (Math.abs(widthRatio - scaleFactor) > 0.1 || Math.abs(heightRatio - scaleFactor) > 0.1) {
-          correctedX = Math.round(x * (widthRatio / scaleFactor));
-          correctedY = Math.round(y * (heightRatio / scaleFactor));
-          width = Math.round(width * (widthRatio / scaleFactor));
-          height = Math.round(height * (heightRatio / scaleFactor));
-        }
-      }
+      // Apply device pixel ratio scaling for Retina displays
+      const finalX = Math.round(x * scaleFactor);
+      const finalY = Math.round(y * scaleFactor);
+      const finalWidth = Math.round(width * scaleFactor);
+      const finalHeight = Math.round(height * scaleFactor);
       
-      // Final coordinate assignment
-      x = correctedX;
-      y = correctedY;
+      console.log('After scaling:', { x: finalX, y: finalY, width: finalWidth, height: finalHeight });
+      console.log('Scale factor applied:', scaleFactor);
+      console.log('=== END GLOBAL PROCESSING ===');
       
       // Ensure bounds are within screenshot dimensions
-      if (x >= maxWidth || y >= maxHeight) {
-        console.warn(`Bounds may be out of range: x=${x}, y=${y}, max=${maxWidth}x${maxHeight}`);
+      if (finalX >= maxWidth || finalY >= maxHeight) {
+        console.warn(`Bounds may be out of range: x=${finalX}, y=${finalY}, max=${maxWidth}x${maxHeight}`);
       }
       
-      // Adjust width and height if they exceed boundaries
-      width = Math.min(width, maxWidth - x);
-      height = Math.min(height, maxHeight - y);
+      // Adjust dimensions if they exceed boundaries
+      const adjustedWidth = Math.min(finalWidth, maxWidth - finalX);
+      const adjustedHeight = Math.min(finalHeight, maxHeight - finalY);
       
       // Final validation
-      if (x + width > maxWidth) {
-        width = maxWidth - x;
-      }
-      if (y + height > maxHeight) {
-        height = maxHeight - y;
-      }
+      const safeX = Math.max(0, Math.min(finalX, maxWidth - 1));
+      const safeY = Math.max(0, Math.min(finalY, maxHeight - 1));
+      const safeWidth = Math.max(1, Math.min(adjustedWidth, maxWidth - safeX));
+      const safeHeight = Math.max(1, Math.min(adjustedHeight, maxHeight - safeY));
       
-      // Ensure minimum size
-      width = Math.max(1, width);
-      height = Math.max(1, height);
-      
-      console.log('Final adjusted bounds:', { x, y, width, height });
+      console.log('Final adjusted bounds:', { x: safeX, y: safeY, width: safeWidth, height: safeHeight });
       
       const timestamp = Date.now();
       const outputPath = path.join(this.tempDir, `capture_${timestamp}.png`);
       
       await sharp(fullScreenshot.filePath)
         .extract({
-          left: x,
-          top: y,
-          width: width,
-          height: height
+          left: safeX,
+          top: safeY,
+          width: safeWidth,
+          height: safeHeight
         })
         .png()
         .toFile(outputPath);
       
-      // Verify the output file was created and get its info
       const outputInfo = await sharp(outputPath).metadata();
       console.log('Output image info:', {
         width: outputInfo.width,
@@ -207,311 +243,701 @@ class ScreenshotService {
         path: outputPath
       });
       
-      // Clean up the temporary full screenshot
-      if (fs.existsSync(fullScreenshot.filePath)) {
-        fs.unlinkSync(fullScreenshot.filePath);
-      }
-      
       console.log('Successfully captured area to:', outputPath);
       return outputPath;
+      
     } catch (error) {
       console.error('Error capturing area:', error);
       throw error;
     }
   }
 
-  async createImageWithTranslation(originalImagePath, originalText, translatedText, textBlocks) {
+  async captureAreaFromExisting(bounds, existingScreenshotPath) {
     try {
+      // Validate bounds
+      if (!bounds || typeof bounds !== 'object') {
+        throw new Error('Invalid bounds object');
+      }
+      
+      if (!existingScreenshotPath || !fs.existsSync(existingScreenshotPath)) {
+        throw new Error('Invalid or missing existing screenshot path');
+      }
+      
+      console.log('Capturing area from existing screenshot:', existingScreenshotPath);
+      console.log('Original bounds received:', bounds);
+      
+      // Extract coordinates - these are now global screen coordinates
+      let { x, y, width, height, rawLeft, rawTop, displayBounds, scalingRatio } = bounds;
+      
+      // Use raw coordinates if available (these are direct from the overlay)
+      if (rawLeft !== undefined && rawTop !== undefined) {
+        console.log('Using raw overlay coordinates for pre-captured screenshot');
+        x = rawLeft;
+        y = rawTop;
+        console.log('Raw coordinates:', { x, y, width, height });
+      }
+      
+      // Ensure all values are numbers and within reasonable limits
+      x = Math.max(0, Math.floor(Number(x) || 0));
+      y = Math.max(0, Math.floor(Number(y) || 0));
+      width = Math.max(1, Math.floor(Number(width) || 1));
+      height = Math.max(1, Math.floor(Number(height) || 1));
+      
+      console.log('Processing area with bounds:', { x, y, width, height });
+      
+      // Get display information
+      const { screen } = require('electron');
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const scaleFactor = primaryDisplay.scaleFactor || 1;
+      
+      console.log('Display info:', {
+        bounds: primaryDisplay.bounds,
+        scaleFactor: scaleFactor,
+        workArea: primaryDisplay.workArea
+      });
+      
+      // Get existing screenshot dimensions
+      const screenshotInfo = await sharp(existingScreenshotPath).metadata();
+      const maxWidth = screenshotInfo.width;
+      const maxHeight = screenshotInfo.height;
+      
+      console.log('Existing screenshot info:', {
+        width: maxWidth,
+        height: maxHeight,
+        filePath: existingScreenshotPath
+      });
+      
+      // Apply device pixel ratio scaling for Retina displays
+      console.log('=== PRE-CAPTURED COORDINATE PROCESSING ===');
+      console.log('Input coordinates (logical pixels):', { x, y, width, height });
+      
+      // Apply device pixel ratio scaling for Retina displays
+      let finalX = Math.round(x * scaleFactor);
+      let finalY = Math.round(y * scaleFactor);
+      let finalWidth = Math.round(width * scaleFactor);
+      let finalHeight = Math.round(height * scaleFactor);
+      
+      // COORDINATE ALIGNMENT FIX: Add Y-offset adjustment for better alignment
+      // The selection overlay and actual screenshot may have slight coordinate differences
+      // User reported selection box needs to be lower, so we adjust capture area down
+      const yOffsetCorrection = 50; // Positive value moves capture area down to match selection box
+      finalY += yOffsetCorrection;
+      
+      console.log('After scaling and alignment:', { 
+        x: finalX, 
+        y: finalY, 
+        width: finalWidth, 
+        height: finalHeight,
+        yOffset: yOffsetCorrection
+      });
+      console.log('Scale factor applied:', scaleFactor);
+      console.log('=== END PRE-CAPTURED PROCESSING ===');
+      
+      // Ensure bounds are within screenshot dimensions
+      if (finalX >= maxWidth || finalY >= maxHeight) {
+        console.warn(`Bounds may be out of range: x=${finalX}, y=${finalY}, max=${maxWidth}x${maxHeight}`);
+      }
+      
+      // Adjust dimensions if they exceed boundaries
+      const adjustedWidth = Math.min(finalWidth, maxWidth - finalX);
+      const adjustedHeight = Math.min(finalHeight, maxHeight - finalY);
+      
+      // Final validation
+      const safeX = Math.max(0, Math.min(finalX, maxWidth - 1));
+      const safeY = Math.max(0, Math.min(finalY, maxHeight - 1));
+      const safeWidth = Math.max(1, Math.min(adjustedWidth, maxWidth - safeX));
+      const safeHeight = Math.max(1, Math.min(adjustedHeight, maxHeight - safeY));
+      
+      console.log('Final adjusted bounds for pre-captured:', { x: safeX, y: safeY, width: safeWidth, height: safeHeight });
+      
       const timestamp = Date.now();
-      const outputPath = path.join(this.tempDir, `translated_${timestamp}.png`);
+      const outputPath = path.join(this.tempDir, `capture_precap_${timestamp}.png`);
       
-      // Load the original image
-      const image = sharp(originalImagePath);
-      const metadata = await image.metadata();
-      const imageBuffer = await image.raw().toBuffer();
-      
-      // Ensure textBlocks is an array
-      textBlocks = textBlocks || [];
-      
-      console.log('Creating intelligent text replacement with background color sampling');
-      console.log('Text blocks to replace:', textBlocks.length);
-      
-      if (!textBlocks || textBlocks.length === 0) {
-        console.log('No text blocks found, creating simple overlay');
-        return await this.createSimpleOverlay(originalImagePath, translatedText, metadata);
-      }
-
-      // Smart text mapping: try to map translation to original text blocks more intelligently
-      const translatedWords = translatedText.split(/\s+/).filter(word => word.length > 0);
-      const originalWords = originalText.split(/\s+/).filter(word => word.length > 0);
-
-      // Create mapping between original and translated text
-      const textMapping = this.createIntelligentTextMapping(originalWords, translatedWords, textBlocks);
-
-      // Create overlay elements for each text block
-      const overlays = [];
-      
-      console.log('Processing text blocks for replacement:');
-      
-      // Check if we have phrase-aware mapping with consecutive groups
-      const hasConsecutiveGroups = this.detectConsecutiveGroups(textBlocks, textMapping);
-      
-      if (hasConsecutiveGroups) {
-        console.log('Creating combined overlays for phrase groups');
-        await this.createCombinedPhraseOverlays(textBlocks, textMapping, overlays, imageBuffer, metadata);
-      } else {
-        // Original individual block processing
-        for (let i = 0; i < textBlocks.length; i++) {
-          const block = textBlocks[i];
-          const mappedText = textMapping[i] || '';
-          
-          console.log(`\nProcessing block ${i}:`);
-          console.log(`  Original text: "${block.text}"`);
-          console.log(`  Mapped text: "${mappedText}"`);
-          console.log(`  Has vertices: ${!!(block.vertices && block.vertices.length >= 4)}`);
-          
-          if (!block.vertices || block.vertices.length < 4) {
-            console.log(`  Skipped: Invalid vertices`);
-            continue;
-          }
-          
-          if (!mappedText || mappedText.trim() === '') {
-            console.log(`  Skipped: Empty mapped text`);
-            continue;
-          }
-          
-          await this.processSingleTextBlock(block, mappedText, i, overlays, imageBuffer, metadata);
-        }
-      }
-      
-      // Apply all overlays to the image
-      await image
-        .composite(overlays)
+      await sharp(existingScreenshotPath)
+        .extract({
+          left: safeX,
+          top: safeY,
+          width: safeWidth,
+          height: safeHeight
+        })
         .png()
         .toFile(outputPath);
       
-      console.log('Created intelligent translated image:', outputPath);
+      const outputInfo = await sharp(outputPath).metadata();
+      console.log('Pre-captured output image info:', {
+        width: outputInfo.width,
+        height: outputInfo.height,
+        path: outputPath
+      });
+      
+      console.log('Successfully captured area from pre-captured screenshot to:', outputPath);
       return outputPath;
+      
     } catch (error) {
-      console.error('Error creating translated image:', error);
+      console.error('Error capturing area from existing screenshot:', error);
       throw error;
     }
   }
 
-  // Helper function to create intelligent text mapping
-  createIntelligentTextMapping(originalWords, translatedWords, textBlocks) {
-    const mapping = [];
-    
-    console.log('Text mapping debug:');
-    console.log('Original words:', originalWords);
-    console.log('Translated words:', translatedWords);
-    console.log('Text blocks count:', textBlocks.length);
-    
-    // Calculate text block areas and sizes
-    const blockSizes = textBlocks.map((block, i) => {
-      if (!block.vertices || block.vertices.length < 4) return { index: i, area: 0, width: 0, height: 0 };
+  // CORE TEXT REPLACEMENT METHOD - Paragraph-by-paragraph translation with precise overlays
+  async createImageWithTranslation(originalImagePath, originalText, textBlocks) {
+    try {
+      console.log('🔄 Starting paragraph-by-paragraph text replacement with auto-language detection...');
+      
+      const timestamp = Date.now();
+      const outputPath = path.join(this.tempDir, `translated_${timestamp}.png`);
+      
+      const image = sharp(originalImagePath);
+      const metadata = await image.metadata();
+      
+      if (!textBlocks || textBlocks.length === 0) {
+        console.log('⚠️ No text blocks found, returning original image');
+        fs.copyFileSync(originalImagePath, outputPath);
+        return { translatedImagePath: outputPath, fullTranslatedText: originalText, detectedLanguage: 'unknown', targetLanguage: 'unknown' };
+      }
+      
+      // Auto-detect language from the full text to determine target language
+      let targetLanguage = 'ja';
+      let detectedLanguage = 'unknown';
+      try {
+        const detectionResult = await this.translationService.detectLanguage(originalText);
+        console.log('Detected language for translation:', detectionResult);
+        if (detectionResult && detectionResult.language === 'ja') {
+          targetLanguage = 'en';
+        }
+        detectedLanguage = detectionResult.language || 'unknown';
+      } catch (error) {
+        console.warn('Language detection failed, defaulting to Japanese target language.', error.message);
+      }
+      console.log(`Target translation language set to: ${targetLanguage}`);
 
-      const xs = block.vertices.map(v => v.x || 0);
-      const ys = block.vertices.map(v => v.y || 0);
-      const left = Math.min(...xs);
-      const top = Math.min(...ys);
-      const width = Math.max(...xs) - left;
-      const height = Math.max(...ys) - top;
-      const area = width * height;
+      // Extract paragraphs from the DOCUMENT_TEXT_DETECTION structure
+      const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks);
+      
+      const overlays = [];
+      const translatedParagraphs = [];
+      
+      // Process each paragraph individually
+      for (const paragraph of paragraphs) {
+        try {
+          // Translate this paragraph individually
+          const translatedParagraphText = await this.translationService.translateText(
+            paragraph.text, 
+            targetLanguage
+          );
+          translatedParagraphs.push(translatedParagraphText);
+          
+          // Create overlay for this paragraph
+          await this.createParagraphOverlay(paragraph, translatedParagraphText, overlays, originalImagePath);
+          
+        } catch (translationError) {
+          console.error(`  ❌ Translation failed for paragraph:`, translationError.message);
+          // Use original text as fallback
+          translatedParagraphs.push(paragraph.text);
+          await this.createParagraphOverlay(paragraph, paragraph.text, overlays, originalImagePath);
+        }
+      }
+      
+      if (overlays.length > 0) {
+        await image.composite(overlays).png().toFile(outputPath);
+      } else {
+        fs.copyFileSync(originalImagePath, outputPath);
+      }
+      
+      return {
+        translatedImagePath: outputPath,
+        fullTranslatedText: translatedParagraphs.join(' '),
+        detectedLanguage,
+        targetLanguage,
+      };
+      
+    } catch (error) {
+      console.error('❌ Error in paragraph-by-paragraph text replacement:', error);
+      throw error;
+    }
+  }
 
-      return { index: i, area, width, height, text: block.text, left, top, right: left + width, bottom: top + height };
+  // Extract paragraphs from DOCUMENT_TEXT_DETECTION textBlocks
+  extractParagraphsFromTextBlocks(textBlocks) {
+    console.log('📋 Extracting paragraphs from DOCUMENT_TEXT_DETECTION structure...');
+    
+    // Group text blocks by their hierarchy (pageIndex, blockIndex, paragraphIndex)
+    const paragraphMap = new Map();
+    
+    textBlocks.forEach(textBlock => {
+      if (!textBlock.hierarchy) {
+        console.log('⚠️ Text block missing hierarchy info, skipping');
+        return;
+      }
+      
+      const { pageIndex, blockIndex, paragraphIndex } = textBlock.hierarchy;
+      const paragraphKey = `${pageIndex}-${blockIndex}-${paragraphIndex}`;
+      
+      if (!paragraphMap.has(paragraphKey)) {
+        paragraphMap.set(paragraphKey, {
+          key: paragraphKey,
+          words: [],
+          hierarchy: { pageIndex, blockIndex, paragraphIndex }
+        });
+      }
+      
+      paragraphMap.get(paragraphKey).words.push(textBlock);
     });
     
-    console.log('Block sizes:', blockSizes);
+    // Convert paragraph groups to structured paragraphs
+    const paragraphs = [];
     
-    // Special handling for common phrase patterns
-    if (translatedWords.length === 2 && textBlocks.length > 2) {
-      // Check if we have a title + multi-word phrase pattern
-      const firstTranslation = translatedWords[0]; // e.g., "キャプチャ"
-      const secondTranslation = translatedWords[1]; // e.g., "範囲選択でスクリーンショットを撮る"
-      
-      // Find consecutive blocks that could form the second phrase
-      // Look for blocks that are on the same line or close vertically
-      const consecutiveGroups = this.findConsecutiveTextBlocks(blockSizes.slice(1)); // Skip first block (title)
-      
-      console.log('Consecutive groups found:', consecutiveGroups);
-      
-      if (consecutiveGroups.length > 0) {
-        // Use the largest consecutive group for the long translation
-        const largestGroup = consecutiveGroups.reduce((max, group) => 
-          group.totalArea > max.totalArea ? group : max);
-        
-        console.log('Using largest group for long translation:', largestGroup);
-        
-        // Map the first translation to the first (title) block
-        mapping[0] = firstTranslation;
-        
-        // Map the long translation to the first block of the largest group
-        const targetBlockIndex = largestGroup.blocks[0].index;
-        mapping[targetBlockIndex] = secondTranslation;
-        
-        // Clear other blocks in the group to avoid duplication
-        for (let i = 1; i < largestGroup.blocks.length; i++) {
-          mapping[largestGroup.blocks[i].index] = '';
-        }
-        
-        // Fill remaining blocks with original text if short
-        for (let i = 0; i < textBlocks.length; i++) {
-          if (mapping[i] === undefined) {
-            const originalBlock = textBlocks[i];
-            if (originalBlock && originalBlock.text && originalBlock.text.length <= 10) {
-              mapping[i] = originalBlock.text;
-            } else {
-              mapping[i] = '';
-            }
-          }
-        }
-        
-        console.log('Phrase-aware mapping:', mapping);
-        return mapping;
-      }
-    }
-
-    // Fallback to size-based mapping for other cases
-    if (translatedWords.length === 1 && textBlocks.length > 1) {
-      const sortedByArea = blockSizes.slice().sort((a, b) => b.area - a.area);
-      const largestBlock = sortedByArea[0];
-      
-      for (let i = 0; i < textBlocks.length; i++) {
-        if (i === largestBlock.index) {
-          mapping[i] = translatedWords[0];
-        } else {
-          const originalBlock = textBlocks[i];
-          if (originalBlock && originalBlock.text && originalBlock.text.length <= 12) {
-            mapping[i] = originalBlock.text;
-          } else {
-            mapping[i] = '';
-          }
-        }
-      }
-    }
-    else if (translatedWords.length <= textBlocks.length) {
-      for (let i = 0; i < textBlocks.length; i++) {
-        if (i < translatedWords.length) {
-          mapping[i] = translatedWords[i];
-        } else {
-          const originalBlock = textBlocks[i];
-          if (originalBlock && originalBlock.text && originalBlock.text.length <= 12) {
-            mapping[i] = originalBlock.text;
-          } else {
-            mapping[i] = '';
-          }
-        }
-      }
-    } 
-    else {
-      const totalTranslatedLength = translatedWords.join(' ').length;
-      const totalBlockArea = blockSizes.reduce((sum, block) => sum + block.area, 0);
-      
-      let translatedIndex = 0;
-      
-      for (let i = 0; i < textBlocks.length; i++) {
-        const block = blockSizes[i];
-        if (block.area === 0) {
-          mapping[i] = '';
-          continue;
-        }
-        
-        const blockRatio = block.area / totalBlockArea;
-        const wordsForThisBlock = Math.max(1, Math.round(translatedWords.length * blockRatio));
-        
-        const wordsToTake = [];
-        for (let j = 0; j < wordsForThisBlock && translatedIndex < translatedWords.length; j++) {
-          wordsToTake.push(translatedWords[translatedIndex]);
-          translatedIndex++;
-        }
-        
-        mapping[i] = wordsToTake.join(' ');
+    paragraphMap.forEach((paragraphGroup, key) => {
+      if (paragraphGroup.words.length === 0) {
+        return;
       }
       
-      if (translatedIndex < translatedWords.length) {
-        const remainingWords = translatedWords.slice(translatedIndex);
-        const largestBlock = blockSizes.reduce((max, block) => 
-          block.area > max.area ? block : max, blockSizes[0]);
+      // Sort words by position (left to right, top to bottom)
+      paragraphGroup.words.sort((a, b) => {
+        const aY = a.vertices[0].y;
+        const bY = b.vertices[0].y;
+        const aX = a.vertices[0].x;
+        const bX = b.vertices[0].x;
         
-        if (mapping[largestBlock.index]) {
-          mapping[largestBlock.index] += ' ' + remainingWords.join(' ');
+        // If on roughly the same line (within 10px), sort by X
+        if (Math.abs(aY - bY) <= 10) {
+          return aX - bX;
         }
-      }
-    }
+        // Otherwise sort by Y
+        return aY - bY;
+      });
+      
+      // Combine words into paragraph text
+      const paragraphText = paragraphGroup.words.map(word => word.text).join(' ');
+      
+      // Calculate combined bounding box for the paragraph
+      const allXs = [];
+      const allYs = [];
+      
+      paragraphGroup.words.forEach(word => {
+        word.vertices.forEach(vertex => {
+          allXs.push(vertex.x || 0);
+          allYs.push(vertex.y || 0);
+        });
+      });
+      
+      const left = Math.min(...allXs);
+      const top = Math.min(...allYs);
+      const right = Math.max(...allXs);
+      const bottom = Math.max(...allYs);
+      
+      const paragraph = {
+        text: paragraphText,
+        boundingBox: {
+          left,
+          top,
+          width: right - left,
+          height: bottom - top
+        },
+        words: paragraphGroup.words,
+        hierarchy: paragraphGroup.hierarchy
+      };
+      
+      paragraphs.push(paragraph);
+      
+      console.log(`📄 Paragraph ${paragraphs.length}: "${paragraphText.substring(0, 50)}..." (${paragraphGroup.words.length} words)`);
+    });
     
-    console.log('Final mapping:', mapping);
-    return mapping;
+    // Sort paragraphs by position (top to bottom, left to right)
+    paragraphs.sort((a, b) => {
+      const aY = a.boundingBox.top;
+      const bY = b.boundingBox.top;
+      const aX = a.boundingBox.left;
+      const bX = b.boundingBox.left;
+      
+      // If paragraphs are roughly on the same vertical level (within 20px), sort by X
+      if (Math.abs(aY - bY) <= 20) {
+        return aX - bX;
+      }
+      // Otherwise sort by Y
+      return aY - bY;
+    });
+    
+    console.log(`📊 Extracted ${paragraphs.length} paragraphs from ${textBlocks.length} word blocks`);
+    return paragraphs;
   }
 
-  // Helper function to find consecutive text blocks that likely form phrases
-  findConsecutiveTextBlocks(blocks) {
-    const groups = [];
-    const processed = new Set();
+  // Create overlay for a single paragraph
+  async createParagraphOverlay(paragraph, translatedText, overlays, originalImagePath) {
+    const boundingBox = paragraph.boundingBox;
     
-    for (let i = 0; i < blocks.length; i++) {
-      if (processed.has(i) || blocks[i].area === 0) continue;
-      
-      const group = { blocks: [blocks[i]], totalArea: blocks[i].area };
-      processed.add(i);
-      
-      // Look for blocks that are on the same line (similar Y position) and close horizontally
-      for (let j = i + 1; j < blocks.length; j++) {
-        if (processed.has(j) || blocks[j].area === 0) continue;
-        
-        const yDiff = Math.abs(blocks[i].top - blocks[j].top);
-        const heightTolerance = Math.max(blocks[i].height, blocks[j].height) * 0.5;
-        
-        // If blocks are on roughly the same line
-        if (yDiff <= heightTolerance) {
-          // Check if they're reasonably close horizontally
-          const horizontalGap = Math.min(
-            Math.abs(blocks[i].right - blocks[j].left),
-            Math.abs(blocks[j].right - blocks[i].left)
-          );
-          
-          if (horizontalGap <= 100) { // Max 100px gap
-            group.blocks.push(blocks[j]);
-            group.totalArea += blocks[j].area;
-            processed.add(j);
-          }
-        }
+    console.log(`📝 Creating paragraph overlay: "${translatedText.substring(0, 50)}..." at (${boundingBox.left}, ${boundingBox.top})`);
+    
+    // Skip if no text to display
+    if (!translatedText || translatedText.trim() === '') {
+      console.log('⚠️ Skipped: empty translation');
+      return;
+    }
+    
+    // Skip if bounding box is too small
+    if (boundingBox.width < 10 || boundingBox.height < 8) {
+      console.log('⚠️ Skipped: bounding box too small');
+      return;
+    }
+    
+    // Sample background color from the area
+    const backgroundColor = await this.sampleBackgroundColor(originalImagePath, boundingBox);
+    
+    // Calculate font size for paragraphs with natural paragraph flow consideration
+    const fontSize = this.calculateParagraphFontSize(boundingBox, paragraph.text, translatedText, paragraph.words.length);
+    
+    // Use contrasting text color
+    const textColor = this.getContrastingTextColor(backgroundColor);
+    
+    console.log(`🎨 Paragraph styling: fontSize=${fontSize}px, bg=${backgroundColor}, text=${textColor}`);
+    
+    // Create SVG overlay with natural paragraph flow
+    const svgOverlay = this.createParagraphTextOverlay(
+      translatedText,
+      boundingBox,
+      fontSize,
+      textColor,
+      backgroundColor
+    );
+    
+    overlays.push({
+      input: Buffer.from(svgOverlay),
+      left: boundingBox.left,
+      top: boundingBox.top,
+      blend: 'over'
+    });
+  }
+
+  // Calculate font size for paragraphs with natural paragraph flow consideration
+  calculateParagraphFontSize(boundingBox, originalText, translatedText, wordCount) {
+    // Analyze word positions to determine actual line count and spacing
+    const wordPositions = this.getWordPositions(boundingBox);
+    const actualLineCount = wordPositions.lineCount;
+    const lineSpacing = wordPositions.averageLineSpacing;
+    
+    console.log(`📐 Paragraph flow font calculation:`);
+    console.log(`  Bounding box: ${boundingBox.width}x${boundingBox.height}px`);
+    console.log(`  Actual line count: ${actualLineCount}`);
+    console.log(`  Average line spacing: ${lineSpacing.toFixed(1)}px`);
+    
+    // Calculate baseline font size based on actual line metrics
+    // Use a larger portion of line spacing for font size (85% instead of 70%)
+    const baselineFromHeight = lineSpacing * 0.85;
+    console.log(`  Baseline from line spacing: ${baselineFromHeight.toFixed(1)}px`);
+    
+    // For paragraph flow, we need to ensure text fits within width constraints
+    const availableWidth = boundingBox.width * 0.95; // Use more width
+    const availableHeight = boundingBox.height * 0.95; // Use more height
+    
+    // More accurate character width estimation for mixed text (English + Japanese)
+    let avgCharWidthRatio = 0.55; // Character width as fraction of font size
+    
+    // Adjust for text type - if we have lots of CJK characters, they're wider
+    const cjkCharCount = (translatedText.match(/[\u3000-\u9fff]/g) || []).length;
+    const totalChars = translatedText.length;
+    const cjkRatio = cjkCharCount / totalChars;
+    
+    if (cjkRatio > 0.5) {
+      avgCharWidthRatio = 0.65; // Wider for predominantly CJK text
+    } else if (cjkRatio > 0.2) {
+      avgCharWidthRatio = 0.6; // Mixed text
+    }
+    
+    console.log(`  CJK characters: ${cjkCharCount}/${totalChars} (${(cjkRatio * 100).toFixed(1)}%)`);
+    console.log(`  Char width ratio: ${avgCharWidthRatio}`);
+    
+    // Calculate how many characters can fit per line with the baseline font size
+    const baselineCharWidth = baselineFromHeight * avgCharWidthRatio;
+    const charsPerLine = Math.floor(availableWidth / baselineCharWidth);
+    const desiredLines = Math.max(actualLineCount, Math.ceil(translatedText.length / charsPerLine));
+    
+    console.log(`  Baseline char width: ${baselineCharWidth.toFixed(1)}px`);
+    console.log(`  Desired chars per line: ${charsPerLine}`);
+    console.log(`  Desired lines: ${desiredLines}`);
+    
+    // Calculate font size based on height constraint
+    const maxFontSizeByHeight = (availableHeight / desiredLines) * 0.85; // Allow for line spacing
+    
+    // Calculate font size based on width constraint
+    const maxFontSizeByWidth = (availableWidth / (charsPerLine * avgCharWidthRatio)) * 0.95;
+    
+    // Use the smaller of the constraints
+    let estimatedFontSize = Math.min(baselineFromHeight, maxFontSizeByHeight, maxFontSizeByWidth);
+    
+    console.log(`  Max font by height: ${maxFontSizeByHeight.toFixed(1)}px`);
+    console.log(`  Max font by width: ${maxFontSizeByWidth.toFixed(1)}px`);
+    console.log(`  Initial estimate: ${estimatedFontSize.toFixed(1)}px`);
+    
+    // Adjust based on text length difference for better readability
+    const originalLength = originalText.length;
+    const translatedLength = translatedText.length;
+    
+    if (translatedLength > originalLength * 1.3) {
+      // If translated text is significantly longer, reduce font size moderately
+      const lengthRatio = Math.sqrt(originalLength / translatedLength);
+      estimatedFontSize *= Math.max(0.9, lengthRatio);
+      console.log(`  Adjusted for longer text: ${estimatedFontSize.toFixed(1)}px`);
+    } else if (translatedLength < originalLength * 0.7) {
+      // If translated text is much shorter, can increase size slightly
+      estimatedFontSize *= Math.min(1.2, Math.sqrt(originalLength / translatedLength));
+      console.log(`  Adjusted for shorter text: ${estimatedFontSize.toFixed(1)}px`);
+    }
+    
+    // Consider word density for better spacing
+    if (wordCount > 25) {
+      estimatedFontSize *= 0.95; // Slight reduction for very dense text
+      console.log(`  Adjusted for high word density: ${estimatedFontSize.toFixed(1)}px`);
+    }
+    
+    // Apply reasonable bounds for readability
+    const minFontSize = 18;  // Increased minimum for better readability
+    const maxFontSize = Math.min(42, lineSpacing * 0.9); // Cap at 90% of line spacing
+    
+    const finalFontSize = Math.max(minFontSize, Math.min(maxFontSize, estimatedFontSize));
+    
+    console.log(`📏 Final paragraph font size calculation:`);
+    console.log(`  Text lengths: ${originalLength} → ${translatedLength}`);
+    console.log(`  Font size bounds: ${minFontSize}-${maxFontSize}px`);
+    console.log(`  Final font size: ${finalFontSize.toFixed(1)}px`);
+    
+    return Math.round(finalFontSize);
+  }
+
+  // Helper function to analyze word positions and determine line metrics
+  getWordPositions(boundingBox) {
+    if (!boundingBox.words || boundingBox.words.length === 0) {
+      return { lineCount: 1, averageLineSpacing: boundingBox.height };
+    }
+
+    // Get all unique y-coordinates (with some tolerance for slight variations)
+    const yPositions = new Set();
+    boundingBox.words.forEach(word => {
+      const y = Math.round(word.vertices[0].y / 5) * 5; // Round to nearest 5px
+      yPositions.add(y);
+    });
+
+    const uniqueYs = Array.from(yPositions).sort((a, b) => a - b);
+    const lineCount = uniqueYs.length;
+
+    // Calculate average line spacing
+    let totalSpacing = 0;
+    let spacingCount = 0;
+    for (let i = 1; i < uniqueYs.length; i++) {
+      const spacing = uniqueYs[i] - uniqueYs[i-1];
+      if (spacing > 0) {
+        totalSpacing += spacing;
+        spacingCount++;
       }
+    }
+
+    const averageLineSpacing = spacingCount > 0 
+      ? totalSpacing / spacingCount 
+      : boundingBox.height / lineCount;
+
+    return { lineCount, averageLineSpacing };
+  }
+
+  // Create SVG overlay for a paragraph with natural paragraph flow
+  createParagraphTextOverlay(text, boundingBox, fontSize, textColor, backgroundColor) {
+    // Calculate padding based on font size
+    const padding = Math.max(6, fontSize * 0.3);
+    
+    // Overlay dimensions with padding
+    const overlayWidth = boundingBox.width + (padding * 2);
+    const overlayHeight = boundingBox.height + (padding * 2);
+    
+    // Calculate text flow parameters with improved line spacing
+    const lineHeight = fontSize * 2.8; // Match original line spacing (about 54px between lines)
+    const availableWidth = boundingBox.width - (padding * 2);
+    
+    // Character width estimation for mixed text
+    let avgCharWidthRatio = 0.55;
+    const cjkCharCount = (text.match(/[\u3000-\u9fff]/g) || []).length;
+    const totalChars = text.length;
+    const cjkRatio = cjkCharCount / totalChars;
+    
+    if (cjkRatio > 0.5) {
+      avgCharWidthRatio = 0.65;
+    } else if (cjkRatio > 0.2) {
+      avgCharWidthRatio = 0.6;
+    }
+    
+    const avgCharWidth = fontSize * avgCharWidthRatio;
+    const maxCharsPerLine = Math.floor(availableWidth / avgCharWidth);
+    
+    console.log(`📐 Text flow calculation:`);
+    console.log(`  Available width: ${availableWidth}px`);
+    console.log(`  CJK ratio: ${(cjkRatio * 100).toFixed(1)}%`);
+    console.log(`  Char width ratio: ${avgCharWidthRatio}`);
+    console.log(`  Avg char width: ${avgCharWidth.toFixed(1)}px`);
+    console.log(`  Max chars per line: ${maxCharsPerLine}`);
+    console.log(`  Line height: ${lineHeight}px`);
+    
+    // Split text into meaningful segments
+    const segments = [];
+    let currentSegment = '';
+    let currentWidth = 0;
+    
+    // Split into meaningful chunks (words or CJK characters)
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const isCJK = /[\u3000-\u9fff]/.test(char);
+      const isSpace = /\s/.test(char);
+      const isPunctuation = /[。、．，！？!?,.]/.test(char);
       
-      // Only consider groups with multiple blocks
-      if (group.blocks.length > 1) {
-        // Sort blocks in the group by horizontal position
-        group.blocks.sort((a, b) => a.left - b.left);
-        groups.push(group);
+      if (isCJK || isPunctuation) {
+        // Add current non-CJK word if exists
+        if (currentSegment) {
+          segments.push(currentSegment);
+          currentSegment = '';
+        }
+        segments.push(char);
+      } else if (isSpace) {
+        // Add current word if exists
+        if (currentSegment) {
+          segments.push(currentSegment);
+          currentSegment = '';
+        }
+        segments.push(char);
+      } else {
+        currentSegment += char;
       }
     }
     
-    return groups;
+    // Add final segment if exists
+    if (currentSegment) {
+      segments.push(currentSegment);
+    }
+    
+    // Create lines with proper wrapping
+    const lines = [];
+    let currentLine = '';
+    currentWidth = 0;
+    
+    for (const segment of segments) {
+      const isCJK = /[\u3000-\u9fff]/.test(segment);
+      const isSpace = /\s/.test(segment);
+      const segmentWidth = segment.length * (isCJK ? avgCharWidth : avgCharWidth * 0.8);
+      
+      // Start new line if adding this segment would exceed width
+      if (currentWidth + segmentWidth > availableWidth && currentLine) {
+        lines.push(currentLine.trim());
+        currentLine = '';
+        currentWidth = 0;
+      }
+      
+      // Add segment to current line
+      currentLine += segment;
+      currentWidth += segmentWidth;
+      
+      // Force line break after sentence endings
+      if (/[。．！？!?.]/.test(segment)) {
+        if (currentLine) {
+          lines.push(currentLine.trim());
+          currentLine = '';
+          currentWidth = 0;
+        }
+      }
+    }
+    
+    // Add final line if exists
+    if (currentLine) {
+      lines.push(currentLine.trim());
+    }
+    
+    console.log(`📝 Text wrapped into ${lines.length} lines:`);
+    lines.forEach((line, index) => {
+      console.log(`  Line ${index + 1}: "${line.substring(0, 40)}${line.length > 40 ? '...' : ''}"`);
+    });
+    
+    // Calculate required height
+    const textHeight = lines.length * lineHeight;
+    const minRequiredHeight = textHeight + (padding * 2);
+    const finalOverlayHeight = Math.max(overlayHeight, minRequiredHeight);
+    
+    console.log(`📊 Height calculation:`);
+    console.log(`  Original height: ${overlayHeight}px`);
+    console.log(`  Required for text: ${minRequiredHeight}px`);
+    console.log(`  Final height: ${finalOverlayHeight}px`);
+    
+    // Create text elements with proper positioning
+    const textElements = lines.map((line, index) => {
+      const lineX = padding;
+      const lineY = padding + (lineHeight * (index + 1)) - (fontSize * 0.3);
+      
+      return `<text x="${lineX}" y="${lineY}" 
+                    font-family="Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans CJK JP', sans-serif" 
+                    font-size="${fontSize}px" 
+                    font-weight="400"
+                    fill="${textColor}" 
+                    text-anchor="start"
+                    dominant-baseline="alphabetic"
+                    style="text-rendering: optimizeLegibility; letter-spacing: 0.02em;">${this.escapeXml(line)}</text>`;
+    }).join('');
+    
+    // Create SVG with proper layout
+    return `
+      <svg width="${overlayWidth}" height="${finalOverlayHeight}" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <filter id="textShadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="1" dy="1" stdDeviation="1" flood-color="rgba(0,0,0,0.3)"/>
+          </filter>
+        </defs>
+        
+        <rect x="0" y="0" width="${overlayWidth}" height="${finalOverlayHeight}" 
+              fill="${backgroundColor}" 
+              opacity="0.92"
+              rx="6"
+              ry="6"
+              stroke="rgba(0,0,0,0.1)"
+              stroke-width="1"/>
+        
+        ${textElements}
+      </svg>
+    `;
   }
 
-  // Helper function to sample background color from image
-  async sampleBackgroundColor(imageBuffer, metadata, left, top, width, height) {
+  // Enhanced background color sampling with better fallback
+  async sampleBackgroundColor(imagePath, boundingBox) {
     try {
-      const { width: imgWidth, height: imgHeight, channels } = metadata;
+      // Sample area around the text bounding box for better color detection
+      const sampleMargin = 8;
+      const sampleX = Math.max(0, boundingBox.left - sampleMargin);
+      const sampleY = Math.max(0, boundingBox.top - sampleMargin);
+      const sampleWidth = Math.min(50, boundingBox.width + (sampleMargin * 2));
+      const sampleHeight = Math.min(50, boundingBox.height + (sampleMargin * 2));
       
-      // Sample multiple points around the text area to get average background color
-      const samplePoints = [
-        { x: Math.max(0, left - 5), y: Math.max(0, top - 5) },
-        { x: Math.min(imgWidth - 1, left + width + 5), y: Math.max(0, top - 5) },
-        { x: Math.max(0, left - 5), y: Math.min(imgHeight - 1, top + height + 5) },
-        { x: Math.min(imgWidth - 1, left + width + 5), y: Math.min(imgHeight - 1, top + height + 5) },
-        { x: left + width / 2, y: top + height / 2 }, // Center point
+      const { data, info } = await sharp(imagePath)
+        .extract({
+          left: sampleX,
+          top: sampleY,
+          width: sampleWidth,
+          height: sampleHeight
+        })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      
+      // Sample multiple strategic points for better color estimation
+      const { width: extractWidth, height: extractHeight, channels } = info;
+      const cornerSamples = [
+        // Four corners of the sample area
+        { x: 0, y: 0 },
+        { x: extractWidth - 1, y: 0 },
+        { x: 0, y: extractHeight - 1 },
+        { x: extractWidth - 1, y: extractHeight - 1 },
+        // Center point
+        { x: Math.floor(extractWidth / 2), y: Math.floor(extractHeight / 2) }
       ];
       
       let totalR = 0, totalG = 0, totalB = 0;
       let validSamples = 0;
       
-      for (const point of samplePoints) {
-        const pixelIndex = (point.y * imgWidth + point.x) * channels;
-        if (pixelIndex + 2 < imageBuffer.length) {
-          totalR += imageBuffer[pixelIndex];
-          totalG += imageBuffer[pixelIndex + 1];
-          totalB += imageBuffer[pixelIndex + 2];
+      for (const sample of cornerSamples) {
+        const pixelIndex = (sample.y * extractWidth + sample.x) * channels;
+        if (pixelIndex + 2 < data.length) {
+          totalR += data[pixelIndex];
+          totalG += data[pixelIndex + 1];
+          totalB += data[pixelIndex + 2];
           validSamples++;
         }
       }
@@ -520,34 +946,66 @@ class ScreenshotService {
         const avgR = Math.round(totalR / validSamples);
         const avgG = Math.round(totalG / validSamples);
         const avgB = Math.round(totalB / validSamples);
+        
+        console.log(`🎨 Sampled background color: rgb(${avgR}, ${avgG}, ${avgB}) from ${validSamples} points`);
         return `rgb(${avgR}, ${avgG}, ${avgB})`;
       }
       
-      // Fallback to white if sampling fails
-      return 'rgb(255, 255, 255)';
+      // Fallback to overall area average if corner sampling fails
+      totalR = totalG = totalB = 0;
+      const pixelCount = data.length / channels;
+      
+      for (let i = 0; i < data.length; i += channels) {
+        totalR += data[i];
+        totalG += data[i + 1];
+        totalB += data[i + 2];
+      }
+      
+      const avgR = Math.round(totalR / pixelCount);
+      const avgG = Math.round(totalG / pixelCount);
+      const avgB = Math.round(totalB / pixelCount);
+      
+      return `rgb(${avgR}, ${avgG}, ${avgB})`;
+      
     } catch (error) {
-      console.error('Error sampling background color:', error);
-      return 'rgb(255, 255, 255)';
+      console.log('📍 Background sampling failed, using neutral background:', error.message);
+      // Return a neutral semi-transparent background that works on most images
+      return 'rgb(248, 248, 248)'; // Very light gray, works well with dark text
     }
   }
 
-  // Helper function to determine contrasting text color
+  // Improved contrast calculation for better text readability
   getContrastingTextColor(backgroundColor) {
     try {
-      // Extract RGB values
+      // Extract RGB values from the background color
       const rgbMatch = backgroundColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-      if (!rgbMatch) return '#000000';
+      if (!rgbMatch) {
+        console.log('⚠️ Could not parse background color, defaulting to black text');
+        return '#000000';
+      }
       
       const r = parseInt(rgbMatch[1]);
       const g = parseInt(rgbMatch[2]);
       const b = parseInt(rgbMatch[3]);
       
-      // Calculate relative luminance
-      const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      // Calculate relative luminance using the standard formula
+      // Convert to linear RGB first
+      const linearR = r <= 10 ? r / 3294 : Math.pow((r / 269 + 0.0513), 2.4);
+      const linearG = g <= 10 ? g / 3294 : Math.pow((g / 269 + 0.0513), 2.4);
+      const linearB = b <= 10 ? b / 3294 : Math.pow((b / 269 + 0.0513), 2.4);
       
-      // Use dark text on light backgrounds, light text on dark backgrounds
-      return luminance > 0.5 ? '#000000' : '#FFFFFF';
+      // Calculate luminance
+      const luminance = 0.2126 * linearR + 0.7152 * linearG + 0.0722 * linearB;
+      
+      // Use a threshold of 0.5 for text color decision
+      // For better readability, we can be more conservative
+      const textColor = luminance > 0.4 ? '#000000' : '#FFFFFF';
+      
+      console.log(`🔤 Text color selection: luminance=${luminance.toFixed(3)} → ${textColor}`);
+      return textColor;
+      
     } catch (error) {
+      console.log('⚠️ Error calculating text contrast, defaulting to black:', error.message);
       return '#000000';
     }
   }
@@ -560,283 +1018,6 @@ class ScreenshotService {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&apos;');
-  }
-
-  async createSimpleOverlay(imagePath, translatedText, metadata) {
-    const timestamp = Date.now();
-    const outputPath = path.join(this.tempDir, `translated_simple_${timestamp}.png`);
-    
-    const fontSize = Math.max(16, Math.min(32, Math.floor(metadata.width / 25)));
-    const lineHeight = fontSize + 8;
-    
-    // Split translated text into lines
-    const maxCharsPerLine = Math.floor(metadata.width / (fontSize * 0.6));
-    const words = translatedText.split(' ');
-    const lines = [];
-    let currentLine = '';
-    
-    for (const word of words) {
-      if ((currentLine + word).length <= maxCharsPerLine) {
-        currentLine += (currentLine ? ' ' : '') + word;
-      } else {
-        if (currentLine) lines.push(currentLine);
-        currentLine = word;
-      }
-    }
-    if (currentLine) lines.push(currentLine);
-    
-    const overlayHeight = Math.max(60, (lines.length * lineHeight) + 20);
-    const overlayY = metadata.height - overlayHeight;
-    
-    const textLines = lines.map((line, index) => {
-      const y = 25 + (index * lineHeight);
-      return `<text x="15" y="${y}" font-family="Roboto, Arial, sans-serif" font-size="${fontSize}" fill="white" font-weight="400">${
-        this.escapeXml(line)
-      }</text>`;
-    }).join('');
-    
-    const svgOverlay = `
-      <svg width="${metadata.width}" height="${overlayHeight}">
-        <rect width="${metadata.width}" height="${overlayHeight}" fill="rgba(0, 0, 0, 0.8)" rx="5"/>
-        ${textLines}
-      </svg>
-    `;
-    
-    await sharp(imagePath)
-      .composite([{ 
-        input: Buffer.from(svgOverlay), 
-        top: overlayY, 
-        left: 0 
-      }])
-      .png()
-      .toFile(outputPath);
-    
-    return outputPath;
-  }
-
-  // Helper function to detect consecutive groups in text blocks
-  detectConsecutiveGroups(textBlocks, textMapping) {
-    // Check if we have empty mappings that indicate consecutive group clearing
-    let hasEmptyMappings = false;
-    let hasNonEmptyMappings = false;
-    
-    for (let i = 0; i < textMapping.length; i++) {
-      if (textMapping[i] === '') {
-        hasEmptyMappings = true;
-      } else if (textMapping[i] && textMapping[i].trim() !== '') {
-        hasNonEmptyMappings = true;
-      }
-    }
-    
-    return hasEmptyMappings && hasNonEmptyMappings;
-  }
-
-  // Helper function to create combined phrase overlays
-  async createCombinedPhraseOverlays(textBlocks, textMapping, overlays, imageBuffer, metadata) {
-    let i = 0;
-    while (i < textBlocks.length) {
-      const mappedText = textMapping[i] || '';
-      const block = textBlocks[i];
-      
-      if (!mappedText || mappedText.trim() === '' || !block.vertices || block.vertices.length < 4) {
-        i++;
-        continue;
-      }
-      
-      // Check if this is the start of a phrase group (non-empty followed by empties)
-      let isStartOfPhrase = false;
-      let phraseEndIndex = i;
-      
-      if (mappedText.length > 20) { // Long translation likely spans multiple blocks
-        // Look ahead for empty mappings (cleared consecutive blocks)
-        for (let j = i + 1; j < textBlocks.length; j++) {
-          if (textMapping[j] === '') {
-            isStartOfPhrase = true;
-            phraseEndIndex = j;
-          } else {
-            break;
-          }
-        }
-      }
-      
-      if (isStartOfPhrase) {
-        console.log(`Creating combined phrase overlay from block ${i} to ${phraseEndIndex}`);
-        await this.createCombinedOverlay(textBlocks, i, phraseEndIndex, mappedText, overlays, imageBuffer, metadata);
-        i = phraseEndIndex + 1;
-      } else {
-        console.log(`Processing single block ${i}: "${block.text}" -> "${mappedText}"`);
-        await this.processSingleTextBlock(block, mappedText, i, overlays, imageBuffer, metadata);
-        i++;
-      }
-    }
-  }
-
-  // Helper function to process a single text block
-  async processSingleTextBlock(block, mappedText, i, overlays, imageBuffer, metadata) {
-    // Calculate bounding box from vertices
-    const xs = block.vertices.map(v => v.x || 0);
-    const ys = block.vertices.map(v => v.y || 0);
-    const left = Math.min(...xs);
-    const top = Math.min(...ys);
-    const right = Math.max(...xs);
-    const bottom = Math.max(...ys);
-    const width = right - left;
-    const height = bottom - top;
-    
-    console.log(`  Dimensions: ${width}x${height} at (${left},${top})`);
-    
-    // Skip if dimensions are too small
-    if (width < 8 || height < 8) {
-      console.log(`  Skipped: Dimensions too small`);
-      return;
-    }
-    
-    // Use Google Translate style: semi-transparent white background with dark text
-    const backgroundColor = 'rgba(255, 255, 255, 0.9)'; // Semi-transparent white
-    const textColor = '#000000'; // Always dark text for readability
-    
-    // Calculate appropriate font size based on original text area
-    const fontSize = Math.max(10, Math.min(height * 0.7, 32));
-    
-    console.log(`Block ${i}: "${block.text}" -> "${mappedText}" at (${left},${top}) ${width}x${height}`);
-    console.log(`Google Translate style: Background: ${backgroundColor}, Text: ${textColor}, Font: ${fontSize}px`);
-    
-    // Create background rectangle with Google Translate style
-    const backgroundSvg = `
-      <svg width="${width + 6}" height="${height + 6}">
-        <rect width="${width + 6}" height="${height + 6}" 
-              fill="white" 
-              fill-opacity="0.9" 
-              stroke="none" 
-              rx="2"/>
-      </svg>
-    `;
-    
-    // Calculate text positioning for better centering
-    const textX = (width + 6) / 2;
-    const textY = (height + 6) / 2;
-    
-    // Create text overlay with proper sizing and positioning
-    const textSvg = `
-      <svg width="${width + 6}" height="${height + 6}">
-        <defs>
-          <style>
-            .translated-text {
-              font-family: 'Roboto', 'Helvetica Neue', 'Arial', sans-serif;
-              font-size: ${fontSize}px;
-              font-weight: 400;
-              fill: ${textColor};
-              text-anchor: middle;
-              dominant-baseline: central;
-            }
-          </style>
-        </defs>
-        <text x="${textX}" y="${textY}" class="translated-text">
-          ${this.escapeXml(mappedText)}
-        </text>
-      </svg>
-    `;
-    
-    // Add background overlay first
-    overlays.push({
-      input: Buffer.from(backgroundSvg),
-      top: Math.max(0, top - 3),
-      left: Math.max(0, left - 3),
-    });
-    
-    // Add text overlay on top
-    overlays.push({
-      input: Buffer.from(textSvg),
-      top: Math.max(0, top - 3),
-      left: Math.max(0, left - 3),
-    });
-  }
-
-  // Helper function to create a combined overlay spanning multiple text blocks
-  async createCombinedOverlay(textBlocks, startIndex, endIndex, text, overlays, imageBuffer, metadata) {
-    // Calculate combined bounding box for all blocks in the phrase
-    let minLeft = Infinity, minTop = Infinity, maxRight = -Infinity, maxBottom = -Infinity;
-    
-    for (let i = startIndex; i <= Math.min(endIndex, textBlocks.length - 1); i++) {
-      const block = textBlocks[i];
-      if (!block.vertices || block.vertices.length < 4) continue;
-      
-      const xs = block.vertices.map(v => v.x || 0);
-      const ys = block.vertices.map(v => v.y || 0);
-      const left = Math.min(...xs);
-      const top = Math.min(...ys);
-      const right = Math.max(...xs);
-      const bottom = Math.max(...ys);
-      
-      minLeft = Math.min(minLeft, left);
-      minTop = Math.min(minTop, top);
-      maxRight = Math.max(maxRight, right);
-      maxBottom = Math.max(maxBottom, bottom);
-    }
-    
-    if (minLeft === Infinity) return; // No valid blocks found
-    
-    const combinedWidth = maxRight - minLeft;
-    const combinedHeight = maxBottom - minTop;
-    
-    console.log(`Combined area: ${combinedWidth}x${combinedHeight} at (${minLeft},${minTop})`);
-    
-    // Use Google Translate style for combined overlays too
-    const backgroundColor = 'rgba(255, 255, 255, 0.9)';
-    const textColor = '#000000';
-    
-    // Calculate font size based on combined area
-    const fontSize = Math.max(12, Math.min(combinedHeight * 0.6, 24));
-    
-    console.log(`Combined Google Translate overlay: Background: ${backgroundColor}, Text: ${textColor}, Font: ${fontSize}px`);
-    
-    // Create combined background rectangle
-    const backgroundSvg = `
-      <svg width="${combinedWidth + 8}" height="${combinedHeight + 8}">
-        <rect width="${combinedWidth + 8}" height="${combinedHeight + 8}" 
-              fill="white" 
-              fill-opacity="0.9" 
-              stroke="none" 
-              rx="3"/>
-      </svg>
-    `;
-    
-    // Create text overlay positioned in the center of combined area
-    const textX = (combinedWidth + 8) / 2;
-    const textY = (combinedHeight + 8) / 2;
-    
-    const textSvg = `
-      <svg width="${combinedWidth + 8}" height="${combinedHeight + 8}">
-        <defs>
-          <style>
-            .combined-text {
-              font-family: 'Roboto', 'Helvetica Neue', 'Arial', sans-serif;
-              font-size: ${fontSize}px;
-              font-weight: 400;
-              fill: ${textColor};
-              text-anchor: middle;
-              dominant-baseline: central;
-            }
-          </style>
-        </defs>
-        <text x="${textX}" y="${textY}" class="combined-text">
-          ${this.escapeXml(text)}
-        </text>
-      </svg>
-    `;
-    
-    // Add combined overlays
-    overlays.push({
-      input: Buffer.from(backgroundSvg),
-      top: Math.max(0, minTop - 4),
-      left: Math.max(0, minLeft - 4),
-    });
-    
-    overlays.push({
-      input: Buffer.from(textSvg),
-      top: Math.max(0, minTop - 4),
-      left: Math.max(0, minLeft - 4),
-    });
   }
 
   cleanupTempFiles() {

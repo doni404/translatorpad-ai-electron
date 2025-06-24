@@ -1,0 +1,90 @@
+{
+  "name": "g-pad-ai",
+  "version": "1.0.0",
+  "description": "Gloding Pad AI - Advanced screenshot translator for macOS",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "prebuild": "node scripts/check-credentials.js",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "dist": "electron-builder --publish=never",
+    "postinstall": "electron-builder install-app-deps",
+    "clean": "rimraf node_modules dist temp",
+    "rebuild": "@electron/rebuild"
+  },
+  "keywords": [
+    "electron",
+    "screenshot",
+    "translation",
+    "vision-api",
+    "macos",
+    "gloding-pad",
+    "g-pad",
+    "ai"
+  ],
+  "author": "GLODING, Inc.",
+  "license": "MIT",
+  "homepage": "https://gloding.com",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.4",
+    "rimraf": "^5.0.5"
+  },
+  "dependencies": {
+    "@google-cloud/translate": "^8.0.2",
+    "@google-cloud/vision": "^4.0.2",
+    "is": "^3.3.0",
+    "screenshot-desktop": "^1.15.0",
+    "sharp": "^0.32.6"
+  },
+  "build": {
+    "appId": "com.gloding.gpad-ai",
+    "productName": "G-Pad AI",
+    "copyright": "Copyright © 2025 GLODING, Inc.",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "credentials/**/*",
+      "node_modules/**/*",
+      "!node_modules/.cache",
+      "!**/node_modules/.cache"
+    ],
+    "asarUnpack": [
+      "node_modules/@google-cloud/**/*",
+      "node_modules/sharp/**/*",
+      "credentials/google-cloud-key.json"
+    ],
+    "mac": {
+      "icon": "assets/icons/gloding-logo.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "title": "G-Pad AI Installer",
+      "icon": "assets/icons/gloding-logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

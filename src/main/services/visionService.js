@@ -42,34 +42,40 @@ class VisionService {
     }
 
     try {
-      console.log('Extracting text from image:', imagePath);
+      console.log('🔍 Extracting text using DOCUMENT_TEXT_DETECTION from image:', imagePath);
       
-      const [result] = await this.client.textDetection(imagePath);
-      const detections = result.textAnnotations;
+      // Use DOCUMENT_TEXT_DETECTION for better structured text extraction
+      const [result] = await this.client.documentTextDetection(imagePath);
       
-      if (!detections || detections.length === 0) {
+      if (!result.fullTextAnnotation) {
+        console.log('⚠️ No text found in the image');
         return { fullText: 'No text found in the image', textBlocks: [] };
       }
       
-      // The first detection contains all the text
-      const fullText = detections[0].description || 'No text detected';
+      const annotation = result.fullTextAnnotation;
+      const fullText = annotation.text || 'No text detected';
       
-      // Extract individual text blocks with their positions (skip the first one as it's the full text)
-      const textBlocks = detections.slice(1).map(detection => ({
-        text: detection.description,
-        boundingPoly: detection.boundingPoly,
-        vertices: detection.boundingPoly.vertices
-      }));
+      console.log('📄 Full text extracted:', fullText.substring(0, 100) + '...');
+      console.log('📋 Document structure found:');
+      console.log(`  Pages: ${annotation.pages?.length || 0}`);
       
-      console.log('Extracted text:', fullText.substring(0, 100) + '...');
-      console.log('Found text blocks:', textBlocks.length);
+      // Extract structured text blocks from the document hierarchy
+      const textBlocks = this.extractStructuredTextBlocks(annotation);
+      
+      console.log(`✅ Extracted ${textBlocks.length} structured text blocks`);
       
       return {
         fullText: fullText,
-        textBlocks: textBlocks
+        textBlocks: textBlocks,
+        documentStructure: {
+          pages: annotation.pages?.length || 0,
+          blocks: this.countBlocks(annotation),
+          paragraphs: this.countParagraphs(annotation),
+          words: this.countWords(annotation)
+        }
       };
     } catch (error) {
-      console.error('Error extracting text:', error);
+      console.error('❌ Error extracting text:', error);
       
       if (error.message.includes('credentials')) {
         throw new Error('Google Cloud credentials are invalid or expired. Please check your setup.');
@@ -79,6 +85,118 @@ class VisionService {
         throw new Error(`Failed to extract text: ${error.message}`);
       }
     }
+  }
+
+  // Extract structured text blocks with better hierarchy and positioning
+  extractStructuredTextBlocks(annotation) {
+    const textBlocks = [];
+    
+    if (!annotation.pages || annotation.pages.length === 0) {
+      console.log('⚠️ No pages found in document structure');
+      return textBlocks;
+    }
+    
+    annotation.pages.forEach((page, pageIndex) => {
+      console.log(`📖 Processing page ${pageIndex + 1}:`);
+      
+      if (!page.blocks) {
+        console.log('  No blocks found on this page');
+        return;
+      }
+      
+      page.blocks.forEach((block, blockIndex) => {
+        console.log(`  📦 Block ${blockIndex + 1}:`);
+        
+        if (!block.paragraphs) {
+          console.log('    No paragraphs found in this block');
+          return;
+        }
+        
+        block.paragraphs.forEach((paragraph, paragraphIndex) => {
+          console.log(`    📝 Paragraph ${paragraphIndex + 1}:`);
+          
+          if (!paragraph.words) {
+            console.log('      No words found in this paragraph');
+            return;
+          }
+          
+          // Process each word individually for precise positioning
+          paragraph.words.forEach((word, wordIndex) => {
+            if (!word.symbols || word.symbols.length === 0) {
+              return;
+            }
+            
+            // Combine symbols to form the word text
+            const wordText = word.symbols.map(symbol => symbol.text || '').join('');
+            
+            if (!wordText.trim()) {
+              return;
+            }
+            
+            // Get bounding box from word's boundingBox
+            const boundingBox = word.boundingBox;
+            if (!boundingBox || !boundingBox.vertices || boundingBox.vertices.length < 4) {
+              console.log(`      ⚠️ Word "${wordText}" has invalid bounding box`);
+              return;
+            }
+            
+            // Create text block with enhanced metadata
+            const textBlock = {
+              text: wordText,
+              boundingPoly: boundingBox,
+              vertices: boundingBox.vertices,
+              confidence: word.confidence || 0,
+              hierarchy: {
+                pageIndex,
+                blockIndex,
+                paragraphIndex,
+                wordIndex
+              },
+              // Additional metadata for better processing
+              blockType: block.blockType || 'TEXT',
+              detectedLanguages: word.property?.detectedLanguages || [],
+              textDirection: paragraph.property?.detectedOrientation || 'HORIZONTAL'
+            };
+            
+            textBlocks.push(textBlock);
+            
+            console.log(`      📍 Word: "${wordText}" at (${boundingBox.vertices[0].x}, ${boundingBox.vertices[0].y})`);
+          });
+        });
+      });
+    });
+    
+    console.log(`📊 Document processing complete: ${textBlocks.length} word-level text blocks extracted`);
+    return textBlocks;
+  }
+
+  // Helper function to count blocks in the document
+  countBlocks(annotation) {
+    if (!annotation.pages) return 0;
+    return annotation.pages.reduce((total, page) => total + (page.blocks?.length || 0), 0);
+  }
+
+  // Helper function to count paragraphs in the document
+  countParagraphs(annotation) {
+    if (!annotation.pages) return 0;
+    return annotation.pages.reduce((total, page) => {
+      if (!page.blocks) return total;
+      return total + page.blocks.reduce((blockTotal, block) => 
+        blockTotal + (block.paragraphs?.length || 0), 0);
+    }, 0);
+  }
+
+  // Helper function to count words in the document
+  countWords(annotation) {
+    if (!annotation.pages) return 0;
+    return annotation.pages.reduce((total, page) => {
+      if (!page.blocks) return total;
+      return total + page.blocks.reduce((blockTotal, block) => {
+        if (!block.paragraphs) return blockTotal;
+        return blockTotal + block.paragraphs.reduce((paragraphTotal, paragraph) =>
+          paragraphTotal + (paragraph.words?.length || 0), 0);
+      }, 0);
+    }, 0);
   }
 
   async detectLanguage(text) {
