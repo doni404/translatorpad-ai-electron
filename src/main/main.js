@@ -15,6 +15,7 @@ class App {
     this.hasUsedCaptureSuccessfully = false;
     this.globalShortcutInProgress = false; // Prevent duplicate shortcut calls
     this.lastShortcutTime = 0; // Add cooldown tracking
+    this.lastLupResult = null; // Store the last lup result for the "Open in App" feature
     
     this.init();
   }
@@ -77,38 +78,21 @@ class App {
   createCaptureOverlay() {
     // ABSOLUTE PREVENTION: If overlay already exists, do not create another
     if (this.captureWindow) {
-      console.log('❌ Capture overlay already exists, preventing duplicate');
+      console.log('❌ Capture overlay (Lup) already exists, preventing duplicate');
       return;
     }
     
-    // Get primary display for global screen capture
-    const primaryDisplay = screen.getPrimaryDisplay();
-    
-    // Store display info for coordinate conversion
-    this.displayInfo = {
-      bounds: primaryDisplay.bounds,
-      scaleFactor: primaryDisplay.scaleFactor || 1,
-      workArea: primaryDisplay.workArea
-    };
-    
-    console.log('Creating capture overlay with display info:', this.displayInfo);
-    
-    // Create overlay that covers the entire primary display
-    // This ensures it works regardless of which app is currently focused
+    // Create the movable, resizable "Lup" window
     this.captureWindow = new BrowserWindow({
-      x: 0,  // Always start at screen origin
-      y: 0,  // Always start at screen origin
-      width: primaryDisplay.bounds.width,
-      height: primaryDisplay.bounds.height,
+      width: 500,
+      height: 400,
       transparent: true,
       frame: false,
       alwaysOnTop: true,
       skipTaskbar: true,
-      resizable: false,
-      movable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreen: false,
+      resizable: true, // Allow user to resize the lup
+      movable: true,   // Allow user to move it
+      hasShadow: false,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -116,193 +100,121 @@ class App {
       }
     });
 
-    // Create capture overlay HTML content for global capture
-    const captureHtml = `
+    this.captureWindow.center();
+
+    const lupHtml = `
     <!DOCTYPE html>
     <html>
     <head>
+        <meta charset="UTF-8">
         <style>
-            * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }
             body {
+                background-color: transparent;
+                margin: 0;
                 font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                background: rgba(0, 0, 0, 0.3);
-                width: 100vw;
-                height: 100vh;
-                cursor: crosshair;
-                overflow: hidden;
-                user-select: none;
-                position: fixed;
-                top: 0;
-                left: 0;
             }
-            .instructions {
-                position: fixed;
-                top: 30px;
-                left: 50%;
-                transform: translateX(-50%);
-                background: rgba(0, 0, 0, 0.9);
+            #container {
+                position: absolute;
+                top: 0; left: 0; right: 0; bottom: 0;
+                box-sizing: border-box;
+                border-radius: 12px;
+                -webkit-app-region: drag; /* Allows dragging the window */
+                
+                /* Refined Black & White Glass Effect */
+                background: rgba(180, 180, 180, 0.2); /* Darker glass tint */
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255, 255, 255, 0.75); /* Thinner inner white line */
+                box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.85), /* Larger, darker outer line */
+                            0 8px 35px rgba(0,0,0,0.3); /* Adjusted depth shadow */
+            }
+            #result-container {
+                 position: absolute;
+                 top: 1px; left: 1px; right: 1px; bottom: 1px; /* Inset within border */
+                 display: none; /* Hidden by default */
+                 border-radius: 11px;
+                 overflow: hidden;
+            }
+            #resultImage {
+                width: 100%;
+                height: 100%;
+            }
+            #controls {
+                position: absolute;
+                top: 15px;
+                right: 15px;
+                display: flex;
+                gap: 8px;
+                -webkit-app-region: no-drag;
+            }
+            .btn {
+                background: rgba(0,0,0,0.5);
                 color: white;
-                padding: 15px 25px;
-                border-radius: 10px;
-                font-size: 16px;
-                z-index: 10001;
-                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-            }
-            .selection-box {
-                position: absolute;
-                border: 3px solid #007AFF;
-                background: rgba(0, 122, 255, 0.1);
-                display: none;
-                z-index: 10000;
-                pointer-events: none;
-            }
-            .selection-box::before {
-                content: '';
-                position: absolute;
-                top: -3px;
-                left: -3px;
-                right: -3px;
-                bottom: -3px;
-                border: 1px dashed rgba(255, 255, 255, 0.8);
-                border-radius: 2px;
-                animation: dash 2s linear infinite;
-            }
-            @keyframes dash {
-                0% { stroke-dashoffset: 0; }
-                100% { stroke-dashoffset: 20px; }
-            }
-            .corner-handle {
-                position: absolute;
-                width: 10px;
-                height: 10px;
-                background: #007AFF;
-                border: 2px solid white;
+                border: 1px solid rgba(255,255,255,0.1);
+                width: 40px;
+                height: 40px;
                 border-radius: 50%;
-                z-index: 10002;
+                font-size: 18px;
+                cursor: pointer;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+                transition: all 0.2s ease;
             }
-            .corner-handle.top-left { top: -5px; left: -5px; }
-            .corner-handle.top-right { top: -5px; right: -5px; }
-            .corner-handle.bottom-left { bottom: -5px; left: -5px; }
-            .corner-handle.bottom-right { bottom: -5px; right: -5px; }
-            .dimensions {
-                position: absolute;
-                top: -35px;
-                left: 0;
-                background: rgba(0, 0, 0, 0.9);
-                color: white;
-                padding: 6px 10px;
-                border-radius: 6px;
-                font-size: 12px;
-                font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-                font-weight: 500;
-                white-space: nowrap;
-                z-index: 10003;
+            .btn:hover {
+                background: rgba(0,0,0,0.7);
+                transform: scale(1.1);
             }
         </style>
     </head>
     <body>
-        <div class="instructions">
-            🔍 <strong>Click and drag</strong> to select an area to capture • Press <strong>ESC</strong> to cancel
+        <div id="container">
+            <div id="result-container">
+                 <img id="resultImage" />
+            </div>
         </div>
-        <div class="selection-box" id="selectionBox">
-            <div class="corner-handle top-left"></div>
-            <div class="corner-handle top-right"></div>
-            <div class="corner-handle bottom-left"></div>
-            <div class="corner-handle bottom-right"></div>
-            <div class="dimensions" id="dimensions"></div>
+        <div id="controls">
+            <button id="captureBtn" class="btn" title="Capture & Translate">📸</button>
+            <button id="clearBtn" class="btn" title="Clear Translation" style="display: none;">🔄</button>
+            <button id="openInAppBtn" class="btn" title="Open in App" style="display: none;">↗️</button>
+            <button id="closeBtn" class="btn" title="Close Lup">❌</button>
         </div>
-        
+
         <script>
-            let isSelecting = false;
-            let startX, startY;
-            const selectionBox = document.getElementById('selectionBox');
-            const dimensions = document.getElementById('dimensions');
+            const captureBtn = document.getElementById('captureBtn');
+            const clearBtn = document.getElementById('clearBtn');
+            const closeBtn = document.getElementById('closeBtn');
+            const openInAppBtn = document.getElementById('openInAppBtn');
+            const resultContainer = document.getElementById('result-container');
+            const resultImage = document.getElementById('resultImage');
 
-            // Global capture - coordinates are relative to entire screen
-            document.addEventListener('mousedown', (e) => {
-                isSelecting = true;
-                startX = e.clientX;
-                startY = e.clientY;
-                
-                selectionBox.style.display = 'block';
-                selectionBox.style.left = startX + 'px';
-                selectionBox.style.top = startY + 'px';
-                selectionBox.style.width = '0px';
-                selectionBox.style.height = '0px';
-                
-                e.preventDefault();
+            captureBtn.addEventListener('click', () => {
+                captureBtn.style.display = 'none'; // Hide capture button
+                window.electronAPI.captureLupArea();
             });
 
-            document.addEventListener('mousemove', (e) => {
-                if (!isSelecting) return;
-                
-                const currentX = e.clientX;
-                const currentY = e.clientY;
-                
-                const left = Math.min(startX, currentX);
-                const top = Math.min(startY, currentY);
-                const width = Math.abs(currentX - startX);
-                const height = Math.abs(currentY - startY);
-                
-                selectionBox.style.left = left + 'px';
-                selectionBox.style.top = top + 'px';
-                selectionBox.style.width = width + 'px';
-                selectionBox.style.height = height + 'px';
-                
-                // Update dimensions display
-                if (width > 50 && height > 20) {
-                    dimensions.textContent = \`\${width} × \${height}\`;
-                    dimensions.style.display = 'block';
-                } else {
-                    dimensions.style.display = 'none';
-                }
-                
-                e.preventDefault();
+            closeBtn.addEventListener('click', () => {
+                window.electronAPI.closeCaptureOverlay();
             });
 
-            document.addEventListener('mouseup', (e) => {
-                if (!isSelecting) return;
-                
-                const currentX = e.clientX;
-                const currentY = e.clientY;
-                
-                const left = Math.min(startX, currentX);
-                const top = Math.min(startY, currentY);
-                const width = Math.abs(currentX - startX);
-                const height = Math.abs(currentY - startY);
-                
-                // Only capture if selection is large enough
-                if (width > 10 && height > 10) {
-                    // Send coordinates directly (they're already in screen coordinates)
-                    window.electronAPI.captureArea({
-                        x: left,
-                        y: top,
-                        width: width,
-                        height: height,
-                        // Store raw coordinates for precise capture
-                        rawLeft: left,
-                        rawTop: top,
-                        // Include display info for coordinate system reference
-                        displayBounds: {
-                            x: 0,
-                            y: 0,
-                            width: window.screen.width,
-                            height: window.screen.height
-                        },
-                        scalingRatio: window.devicePixelRatio
-                    });
-                }
-                
-                // Reset selection state
-                isSelecting = false;
-                selectionBox.style.display = 'none';
-                
-                e.preventDefault();
+            clearBtn.addEventListener('click', () => {
+                resultContainer.style.display = 'none'; // Hide image
+                clearBtn.style.display = 'none'; // Hide self
+                openInAppBtn.style.display = 'none'; // Hide open in app button
+                captureBtn.style.display = 'flex'; // Show capture button again
+                // No need to call main process, reset is purely UI now
+            });
+
+            openInAppBtn.addEventListener('click', () => {
+                window.electronAPI.openInApp();
+            });
+
+            // Listen for the translated image from main process
+            window.electronAPI.onLupResult((imageDataUrl) => {
+                resultImage.src = imageDataUrl;
+                resultContainer.style.display = 'block';
+                clearBtn.style.display = 'flex'; // Show clear button
+                openInAppBtn.style.display = 'flex'; // Show open in app button
             });
 
             // ESC key to cancel
@@ -311,17 +223,11 @@ class App {
                     window.electronAPI.closeCaptureOverlay();
                 }
             });
-
-            // Prevent context menu
-            document.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-            });
         </script>
     </body>
     </html>`;
 
-    // Load the HTML content directly
-    this.captureWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(captureHtml));
+    this.captureWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(lupHtml));
 
     // Ensure window is focused and on top
     this.captureWindow.once('ready-to-show', () => {
@@ -494,11 +400,163 @@ class App {
 
   setupIpcHandlers() {
     ipcMain.handle('start-capture', async () => {
-      return await this.startScreenCapture();
+      // This function is now simplified, as screenshot is taken on-demand
+      try {
+        // Check permissions silently first when called from UI
+        const hasPermission = await this.checkScreenPermissions(false);
+        if (!hasPermission) {
+          console.log('Screen recording permission needed, showing permission dialog...');
+          // Show the dialog since permission is actually needed
+          const dialogResult = await this.checkScreenPermissions(true);
+          if (!dialogResult) {
+            return { success: false, error: 'Screen recording permission required' };
+          }
+          
+          // If permission was "not-determined", we need to trigger the system dialog
+          // by attempting a capture, then wait for user response
+          const initialStatus = systemPreferences.getMediaAccessStatus('screen');
+          if (initialStatus === 'not-determined') {
+            console.log('Triggering system permission dialog...');
+            
+            // Ensure main window is visible to show toast messages
+            if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+              this.mainWindow.show();
+              this.mainWindow.focus();
+            }
+            
+            // Take a quick screenshot to trigger the system permission dialog
+            try {
+              await this.screenshotService.captureFullScreen();
+            } catch (error) {
+              console.log('Screenshot attempt triggered permission dialog (expected)');
+            }
+            
+            // Wait for user to grant permission
+            const permissionGranted = await this.waitForScreenPermission();
+            if (!permissionGranted) {
+              // Keep main window visible on permission denial
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.show();
+                this.mainWindow.focus();
+              }
+              return { success: false, error: 'Screen recording permission was denied' };
+            }
+            
+            // IMPORTANT: Permission was just granted, so we need to verify it's actually working
+            // Wait a moment for the system to fully apply the permission
+            console.log('Permission granted, verifying...');
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Double-check permission status
+            const finalStatus = systemPreferences.getMediaAccessStatus('screen');
+            if (finalStatus !== 'granted') {
+              console.log('Permission verification failed:', finalStatus);
+              return { success: false, error: 'Screen recording permission was not properly granted. Please restart the app.' };
+            }
+          }
+        }
+
+        console.log('UI capture button pressed - using smart capture strategy...');
+
+        // Hide main window and show the lup. No pre-capture needed here.
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.hide();
+        }
+        await new Promise(resolve => setTimeout(resolve, 300)); // Wait for hide animation
+        this.createCaptureOverlay();
+
+        return { success: true };
+      } catch (error) {
+        console.error('Error starting screen capture:', error);
+        return { success: false, error: error.message };
+      }
     });
 
-    ipcMain.handle('capture-area', async (event, bounds) => {
-      return await this.captureSelectedArea(bounds);
+    ipcMain.handle('capture-lup-area', async () => {
+      try {
+        if (!this.captureWindow) {
+          throw new Error('Capture window is not available.');
+        }
+
+        const bounds = this.captureWindow.getBounds();
+        console.log('Lup capture initiated with bounds:', bounds);
+
+        // --- Just-In-Time Screenshot ---
+        this.captureWindow.hide();
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const screenshot = await this.screenshotService.captureFullScreenBackground();
+        this.captureWindow.show();
+        // --- End Just-In-Time Screenshot ---
+
+        const imagePath = await this.screenshotService.captureAreaFromExisting(
+          bounds, 
+          screenshot.filePath
+        );
+        
+        const extractionResult = await this.visionService.extractText(imagePath);
+        
+        const translationResult = await this.screenshotService.createImageWithTranslation(
+          imagePath, 
+          extractionResult.fullText, 
+          extractionResult.textBlocks
+        );
+
+        this.lastLupResult = {
+          id: `cap-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Unique ID
+          success: true,
+          originalText: extractionResult.fullText,
+          translatedText: translationResult.fullTranslatedText,
+          imagePath: imagePath,
+          detectedLanguage: translationResult.detectedLanguage,
+          targetLanguage: translationResult.targetLanguage,
+          textBlocks: extractionResult.textBlocks
+        };
+        
+        // --- CORRECTED LOGIC ---
+        // 1. Send to history immediately after capture.
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          console.log('Sending capture result to main window for history.');
+          this.mainWindow.webContents.send('capture-complete', this.lastLupResult);
+        }
+
+        // 2. Send image to Lup window to be displayed.
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          const imageBuffer = fs.readFileSync(translationResult.translatedImagePath);
+          const dataUrl = `data:image/png;base64,${imageBuffer.toString('base64')}`;
+          this.captureWindow.webContents.send('lup-result', dataUrl);
+        }
+
+        this.globalShortcutInProgress = false;
+        this.lastShortcutTime = 0;
+        console.log('Lup capture process completed.');
+
+        return { success: true };
+
+      } catch (error) {
+        console.error('Error during lup capture process:', error);
+        if (this.captureWindow) {
+          this.captureWindow.close();
+        }
+        this.globalShortcutInProgress = false;
+        this.lastShortcutTime = 0;
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('open-in-app', () => {
+      // --- CORRECTED LOGIC ---
+      // This button's only job is to show the main window. History is already logged.
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        console.log('Bringing main window to front.');
+        this.mainWindow.show();
+        this.mainWindow.focus();
+        
+        if (this.captureWindow) {
+          this.captureWindow.close();
+        }
+      } else {
+        console.warn('Could not open in app: Main window is not available.');
+      }
     });
 
     ipcMain.handle('close-capture-overlay', () => {
@@ -506,9 +564,19 @@ class App {
         this.captureWindow.close();
         this.captureWindow = null;
       }
-      // Reset global shortcut flag when overlay is closed/cancelled
+      // Restore the main window when the lup is closed
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.show();
+        this.mainWindow.focus();
+        // Tell the renderer to go back to the home screen
+        this.mainWindow.webContents.send('reset-to-home');
+      }
       this.globalShortcutInProgress = false;
       console.log('Capture overlay closed, flag reset');
+    });
+
+    ipcMain.handle('capture-area', async (event, bounds) => {
+      return await this.captureSelectedArea(bounds);
     });
 
     ipcMain.handle('extract-and-translate', async (event, { imagePath, targetLanguage }) => {
@@ -597,118 +665,6 @@ class App {
         this.mainWindow.focus();
       }
     });
-  }
-
-  async startScreenCapture() {
-    try {
-      // Check permissions silently first when called from UI
-      const hasPermission = await this.checkScreenPermissions(false);
-      if (!hasPermission) {
-        console.log('Screen recording permission needed, showing permission dialog...');
-        // Show the dialog since permission is actually needed
-        const dialogResult = await this.checkScreenPermissions(true);
-        if (!dialogResult) {
-          return { success: false, error: 'Screen recording permission required' };
-        }
-        
-        // If permission was "not-determined", we need to trigger the system dialog
-        // by attempting a capture, then wait for user response
-        const initialStatus = systemPreferences.getMediaAccessStatus('screen');
-        if (initialStatus === 'not-determined') {
-          console.log('Triggering system permission dialog...');
-          
-          // Ensure main window is visible to show toast messages
-          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-            this.mainWindow.show();
-            this.mainWindow.focus();
-          }
-          
-          // Take a quick screenshot to trigger the system permission dialog
-          try {
-            await this.screenshotService.captureFullScreen();
-          } catch (error) {
-            console.log('Screenshot attempt triggered permission dialog (expected)');
-          }
-          
-          // Wait for user to grant permission
-          const permissionGranted = await this.waitForScreenPermission();
-          if (!permissionGranted) {
-            // Keep main window visible on permission denial
-            if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-              this.mainWindow.show();
-              this.mainWindow.focus();
-            }
-            return { success: false, error: 'Screen recording permission was denied' };
-          }
-          
-          // IMPORTANT: Permission was just granted, so we need to verify it's actually working
-          // Wait a moment for the system to fully apply the permission
-          console.log('Permission granted, verifying...');
-          await new Promise(resolve => setTimeout(resolve, 500));
-          
-          // Double-check permission status
-          const finalStatus = systemPreferences.getMediaAccessStatus('screen');
-          if (finalStatus !== 'granted') {
-            console.log('Permission verification failed:', finalStatus);
-            return { success: false, error: 'Screen recording permission was not properly granted. Please restart the app.' };
-          }
-        }
-      }
-
-      console.log('UI capture button pressed - using smart capture strategy...');
-
-      // Use the same strategy as global shortcut for consistent behavior
-      // Step 1: Get the current frontmost app before we interfere
-      const frontmostApp = await this.getFrontmostApplication();
-      console.log('Frontmost app detected:', frontmostApp);
-      
-      // Step 2: Hide G-Pad AI completely (not just minimize)
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.hide();
-      }
-      
-      // Step 3: If the frontmost app wasn't G-Pad AI, try to restore it
-      if (frontmostApp && frontmostApp !== 'G-Pad AI' && frontmostApp !== 'Electron') {
-        console.log(`Attempting to restore ${frontmostApp}...`);
-        await this.restoreFrontmostApp(frontmostApp);
-        
-        // Wait for the app to redraw
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } else {
-        // If G-Pad AI was frontmost, just wait for desktop
-        console.log('G-Pad AI was frontmost, waiting for desktop...');
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
-
-      // Step 4: Take background screenshot (like global shortcut)
-      console.log('Taking background screenshot for UI capture...');
-      const preCapture = await this.screenshotService.captureFullScreenBackground();
-      this.preCaptureScreenshot = preCapture;
-
-      // If capture window already exists, close it first
-      if (this.captureWindow) {
-        this.captureWindow.close();
-        this.captureWindow = null;
-      }
-
-      // Small delay to ensure any existing window is fully closed
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // Step 5: Create the transparent overlay for global area selection
-      this.createCaptureOverlay();
-      
-      return { success: true };
-    } catch (error) {
-      console.error('Error starting screen capture:', error);
-      
-      // On error, restore the main window
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.show();
-        this.mainWindow.focus();
-      }
-      
-      return { success: false, error: error.message };
-    }
   }
 
   async startScreenCaptureWithoutPreCapture() {

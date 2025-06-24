@@ -2,12 +2,6 @@
 let currentTranslation = null;
 let translationHistory = JSON.parse(localStorage.getItem('translationHistory') || '[]');
 let availableLanguages = [];
-let isCapturing = false;
-let captureCanvas = null;
-let captureContext = null;
-let screenshotImage = null;
-let selectionStart = null;
-let isSelecting = false;
 let googleCloudConfigured = false;
 
 // Initialize the application
@@ -25,7 +19,7 @@ function setupEventListeners() {
     document.querySelectorAll('[data-section]').forEach(link => {
         link.addEventListener('click', (e) => {
             e.preventDefault();
-            const section = e.target.getAttribute('data-section');
+            const section = e.currentTarget.getAttribute('data-section');
             showSection(section);
         });
     });
@@ -88,25 +82,38 @@ function setupEventListeners() {
             showToast(data.message, data.type);
         });
     }
+
+    // Listen for request to reset UI to home screen
+    window.electronAPI.onResetToHome(() => {
+        closeModal();
+    });
 }
 
 // Navigation between sections
 function showSection(sectionName) {
-    // Hide all sections
+    // Hide all main content sections first
     document.querySelectorAll('.section').forEach(section => {
         section.classList.remove('active');
     });
     
-    // Remove active class from all nav items
-    document.querySelectorAll('.nav-item').forEach(item => {
-        item.classList.remove('active');
+    // Then, show the target section
+    const targetSection = document.getElementById(sectionName);
+    if (targetSection) {
+        targetSection.classList.add('active');
+    }
+    
+    // Finally, update the active state for all navigation links by
+    // targeting the parent '.nav-item' which the CSS rule expects.
+    document.querySelectorAll('.sidebar .nav-link[data-section]').forEach(link => {
+        const navItem = link.closest('.nav-item');
+        if (navItem) {
+            if (link.getAttribute('data-section') === sectionName) {
+                navItem.classList.add('active');
+            } else {
+                navItem.classList.remove('active');
+            }
+        }
     });
-    
-    // Show target section
-    document.getElementById(sectionName).classList.add('active');
-    
-    // Add active class to corresponding nav item
-    document.querySelector(`[data-section="${sectionName}"]`).classList.add('active');
 }
 
 // Start capture process
@@ -121,241 +128,6 @@ async function startCapture() {
     } catch (error) {
         showError('Error starting capture: ' + error.message);
     } finally {
-        showLoading(false);
-    }
-}
-
-// Setup capture overlay
-function setupCaptureOverlay() {
-    // Create overlay container
-    const overlay = document.createElement('div');
-    overlay.id = 'capture-overlay';
-    overlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        background: rgba(0, 0, 0, 0.6);
-        z-index: 10000;
-        cursor: crosshair;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        backdrop-filter: blur(2px);
-    `;
-
-    // Create instructions
-    const instructions = document.createElement('div');
-    instructions.style.cssText = `
-        position: absolute;
-        top: 30px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.9);
-        color: white;
-        padding: 15px 25px;
-        border-radius: 10px;
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-        font-size: 16px;
-        z-index: 10001;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-    `;
-    instructions.innerHTML = '🔍 <strong>Click and drag</strong> to select an area to capture • Press <strong>ESC</strong> to cancel';
-
-    // Create canvas for screenshot and selection
-    captureCanvas = document.createElement('canvas');
-    captureContext = captureCanvas.getContext('2d');
-    
-    // Size canvas to fit window while maintaining aspect ratio
-    const windowWidth = window.innerWidth;
-    const windowHeight = window.innerHeight;
-    const imageAspect = screenshotImage.width / screenshotImage.height;
-    const windowAspect = windowWidth / windowHeight;
-    
-    let canvasWidth, canvasHeight;
-    if (imageAspect > windowAspect) {
-        canvasWidth = windowWidth * 0.95;
-        canvasHeight = canvasWidth / imageAspect;
-    } else {
-        canvasHeight = (windowHeight - 120) * 0.95; // Account for instructions
-        canvasWidth = canvasHeight * imageAspect;
-    }
-    
-    captureCanvas.width = canvasWidth;
-    captureCanvas.height = canvasHeight;
-    captureCanvas.style.cssText = `
-        border: 3px solid #007AFF;
-        border-radius: 12px;
-        cursor: crosshair;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-        background: #000;
-    `;
-    
-    // Draw screenshot on canvas
-    captureContext.drawImage(screenshotImage, 0, 0, canvasWidth, canvasHeight);
-    
-    // Add event listeners
-    captureCanvas.addEventListener('mousedown', startSelection);
-    captureCanvas.addEventListener('mousemove', updateSelection);
-    captureCanvas.addEventListener('mouseup', endSelection);
-    captureCanvas.addEventListener('mouseleave', () => {
-        if (isSelecting) {
-            isSelecting = false;
-            // Redraw clean screenshot
-            captureContext.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
-            captureContext.drawImage(screenshotImage, 0, 0, canvasWidth, canvasHeight);
-        }
-    });
-    
-    // Add keyboard listener for ESC
-    const escapeHandler = (e) => {
-        if (e.key === 'Escape') {
-            cancelCapture();
-            document.removeEventListener('keydown', escapeHandler);
-        }
-    };
-    document.addEventListener('keydown', escapeHandler);
-    
-    // Add elements to overlay
-    overlay.appendChild(instructions);
-    overlay.appendChild(captureCanvas);
-    document.body.appendChild(overlay);
-}
-
-// Selection handling with improved visual feedback
-function startSelection(e) {
-    isSelecting = true;
-    const rect = captureCanvas.getBoundingClientRect();
-    selectionStart = {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top
-    };
-    
-    // Change cursor to indicate selection started
-    captureCanvas.style.cursor = 'crosshair';
-}
-
-function updateSelection(e) {
-    if (!isSelecting) return;
-    
-    const rect = captureCanvas.getBoundingClientRect();
-    const currentPos = {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top
-    };
-    
-    // Redraw screenshot
-    captureContext.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
-    captureContext.drawImage(screenshotImage, 0, 0, captureCanvas.width, captureCanvas.height);
-    
-    // Calculate selection rectangle
-    const x = Math.min(selectionStart.x, currentPos.x);
-    const y = Math.min(selectionStart.y, currentPos.y);
-    const width = Math.abs(currentPos.x - selectionStart.x);
-    const height = Math.abs(currentPos.y - selectionStart.y);
-    
-    // Draw darkened overlay everywhere except selection
-    captureContext.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    captureContext.fillRect(0, 0, captureCanvas.width, captureCanvas.height);
-    
-    // Clear the selected area (show original image)
-    captureContext.clearRect(x, y, width, height);
-    captureContext.drawImage(screenshotImage, x, y, width, height, x, y, width, height);
-    
-    // Draw selection border with animated effect
-    captureContext.strokeStyle = '#007AFF';
-    captureContext.lineWidth = 3;
-    captureContext.setLineDash([8, 4]);
-    captureContext.lineDashOffset = Date.now() * 0.01; // Animated dashes
-    captureContext.strokeRect(x, y, width, height);
-    
-    // Add corner handles for resize indication
-    const handleSize = 8;
-    captureContext.fillStyle = '#007AFF';
-    captureContext.setLineDash([]);
-    
-    // Corner handles
-    captureContext.fillRect(x - handleSize/2, y - handleSize/2, handleSize, handleSize);
-    captureContext.fillRect(x + width - handleSize/2, y - handleSize/2, handleSize, handleSize);
-    captureContext.fillRect(x - handleSize/2, y + height - handleSize/2, handleSize, handleSize);
-    captureContext.fillRect(x + width - handleSize/2, y + height - handleSize/2, handleSize, handleSize);
-    
-    // Show selection dimensions
-    if (width > 50 && height > 20) {
-        const dimensionText = `${Math.round(width)} × ${Math.round(height)}`;
-        captureContext.fillStyle = 'rgba(0, 0, 0, 0.8)';
-        captureContext.fillRect(x, y - 25, dimensionText.length * 8 + 10, 20);
-        captureContext.fillStyle = '#ffffff';
-        captureContext.font = '12px -apple-system, BlinkMacSystemFont, sans-serif';
-        captureContext.fillText(dimensionText, x + 5, y - 10);
-    }
-}
-
-async function endSelection(e) {
-    if (!isSelecting) return;
-    
-    isSelecting = false;
-    const rect = captureCanvas.getBoundingClientRect();
-    const selectionEnd = {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top
-    };
-    
-    // Calculate selection bounds (in original screenshot coordinates)
-    const scaleX = screenshotImage.width / captureCanvas.width;
-    const scaleY = screenshotImage.height / captureCanvas.height;
-    
-    const bounds = {
-        x: Math.min(selectionStart.x, selectionEnd.x) * scaleX,
-        y: Math.min(selectionStart.y, selectionEnd.y) * scaleY,
-        width: Math.abs(selectionEnd.x - selectionStart.x) * scaleX,
-        height: Math.abs(selectionEnd.y - selectionStart.y) * scaleY
-    };
-    
-    // Remove overlay
-    const overlay = document.getElementById('capture-overlay');
-    if (overlay) {
-        overlay.remove();
-    }
-    
-    isCapturing = false;
-    
-    // Process the captured area
-    if (bounds.width > 10 && bounds.height > 10) {
-        await processCapture(bounds);
-    }
-}
-
-function cancelCapture() {
-    const overlay = document.getElementById('capture-overlay');
-    if (overlay) {
-        overlay.remove();
-    }
-    isCapturing = false;
-    isSelecting = false;
-}
-
-// Process captured area
-async function processCapture(bounds) {
-    try {
-        showLoading(true);
-        
-        // Capture the selected area
-        const captureResult = await window.electronAPI.captureArea(bounds);
-        
-        if (!captureResult.success) {
-            showError('Failed to capture area: ' + captureResult.error);
-            return;
-        }
-        
-        // The intelligent language detection and translation is now handled in main.js
-        // We'll get the result via the capture completion handler
-        
-    } catch (error) {
-        showError('Error processing capture: ' + error.message);
         showLoading(false);
     }
 }
@@ -723,6 +495,16 @@ function handleCaptureComplete(result) {
     console.log('Capture completed:', result);
     
     if (result.success) {
+        // --- FIX: Prevent Duplicate History ---
+        // Check if an entry with this exact ID already exists.
+        const existingEntry = translationHistory.find(item => item.id === result.id);
+        if (existingEntry) {
+            console.log('Duplicate history item detected. Ignoring.');
+            // Still show the result, just don't add another history item.
+            showTranslationResult(existingEntry);
+            return;
+        }
+
         const detectedLang = result.detectedLanguage || 'unknown';
         const targetLang = result.targetLanguage || 'ja';
         
@@ -730,7 +512,7 @@ function handleCaptureComplete(result) {
         console.log('Text blocks found:', result.textBlocks ? result.textBlocks.length : 0);
         
         currentTranslation = {
-            id: Date.now(),
+            id: result.id, // Use the ID from the main process
             originalText: result.originalText,
             translatedText: result.translatedText,
             timestamp: new Date().toISOString(),
@@ -956,12 +738,11 @@ function updateApiStatus(isConfigured, message) {
     }
 }
 
-// Clear history
 function clearHistory() {
     if (confirm('Are you sure you want to clear all translation history?')) {
         translationHistory = [];
         localStorage.setItem('translationHistory', JSON.stringify(translationHistory));
-        loadHistory();
+        loadHistory(); // Reload the history view to show the empty state
         showToast('Translation history cleared successfully!', 'success');
     }
 } 

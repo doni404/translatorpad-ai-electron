@@ -380,11 +380,9 @@ class ScreenshotService {
   }
 
   // CORE TEXT REPLACEMENT METHOD - Paragraph-by-paragraph translation with precise overlays
-  async createImageWithTranslation(originalImagePath, originalText, translatedText, textBlocks) {
+  async createImageWithTranslation(originalImagePath, originalText, textBlocks) {
     try {
-      console.log('🔄 Starting paragraph-by-paragraph text replacement with precise overlays...');
-      console.log(`Original text: "${originalText.substring(0, 100)}..."`);
-      console.log(`Text blocks: ${textBlocks.length}`);
+      console.log('🔄 Starting paragraph-by-paragraph text replacement with auto-language detection...');
       
       const timestamp = Date.now();
       const outputPath = path.join(this.tempDir, `translated_${timestamp}.png`);
@@ -395,62 +393,63 @@ class ScreenshotService {
       if (!textBlocks || textBlocks.length === 0) {
         console.log('⚠️ No text blocks found, returning original image');
         fs.copyFileSync(originalImagePath, outputPath);
-        return outputPath;
+        return { translatedImagePath: outputPath, fullTranslatedText: originalText, detectedLanguage: 'unknown', targetLanguage: 'unknown' };
       }
       
+      // Auto-detect language from the full text to determine target language
+      let targetLanguage = 'ja';
+      let detectedLanguage = 'unknown';
+      try {
+        const detectionResult = await this.translationService.detectLanguage(originalText);
+        console.log('Detected language for translation:', detectionResult);
+        if (detectionResult && detectionResult.language === 'ja') {
+          targetLanguage = 'en';
+        }
+        detectedLanguage = detectionResult.language || 'unknown';
+      } catch (error) {
+        console.warn('Language detection failed, defaulting to Japanese target language.', error.message);
+      }
+      console.log(`Target translation language set to: ${targetLanguage}`);
+
       // Extract paragraphs from the DOCUMENT_TEXT_DETECTION structure
       const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks);
       
-      console.log(`📝 Extracted ${paragraphs.length} paragraphs for individual translation`);
-      
       const overlays = [];
+      const translatedParagraphs = [];
       
       // Process each paragraph individually
-      for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex++) {
-        const paragraph = paragraphs[paragraphIndex];
-        
-        console.log(`\n📍 Paragraph ${paragraphIndex + 1}:`);
-        console.log(`  Original: "${paragraph.text}"`);
-        console.log(`  Position: (${paragraph.boundingBox.left}, ${paragraph.boundingBox.top})`);
-        console.log(`  Size: ${paragraph.boundingBox.width}x${paragraph.boundingBox.height}`);
-        
-        // Skip very short paragraphs (like single punctuation)
-        if (paragraph.text.trim().length <= 2) {
-          console.log(`  ⚠️ Skipped: too short`);
-          continue;
-        }
-        
+      for (const paragraph of paragraphs) {
         try {
           // Translate this paragraph individually
-          const translatedParagraph = await this.translationService.translateText(
+          const translatedParagraphText = await this.translationService.translateText(
             paragraph.text, 
-            'ja' // TODO: Make this dynamic based on detected language
+            targetLanguage
           );
-          
-          console.log(`  Translation: "${translatedParagraph}"`);
+          translatedParagraphs.push(translatedParagraphText);
           
           // Create overlay for this paragraph
-          await this.createParagraphOverlay(paragraph, translatedParagraph, overlays, originalImagePath);
+          await this.createParagraphOverlay(paragraph, translatedParagraphText, overlays, originalImagePath);
           
         } catch (translationError) {
-          console.error(`  ❌ Translation failed for paragraph ${paragraphIndex + 1}:`, translationError.message);
+          console.error(`  ❌ Translation failed for paragraph:`, translationError.message);
           // Use original text as fallback
+          translatedParagraphs.push(paragraph.text);
           await this.createParagraphOverlay(paragraph, paragraph.text, overlays, originalImagePath);
         }
       }
       
       if (overlays.length > 0) {
-        await image
-          .composite(overlays)
-          .png()
-          .toFile(outputPath);
-        console.log(`✅ Successfully created translated image with ${overlays.length} paragraph overlays`);
+        await image.composite(overlays).png().toFile(outputPath);
       } else {
         fs.copyFileSync(originalImagePath, outputPath);
-        console.log('⚠️ No valid paragraph overlays created, returning original image');
       }
       
-      return outputPath;
+      return {
+        translatedImagePath: outputPath,
+        fullTranslatedText: translatedParagraphs.join(' '),
+        detectedLanguage,
+        targetLanguage,
+      };
       
     } catch (error) {
       console.error('❌ Error in paragraph-by-paragraph text replacement:', error);

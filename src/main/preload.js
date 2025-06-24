@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startCapture: () => ipcRenderer.invoke('start-capture'),
   captureArea: (bounds) => ipcRenderer.invoke('capture-area', bounds),
   closeCaptureOverlay: () => ipcRenderer.invoke('close-capture-overlay'),
+  captureLupArea: () => ipcRenderer.invoke('capture-lup-area'),
+  resetLupCapture: () => ipcRenderer.invoke('reset-lup-capture'),
+  openInApp: () => ipcRenderer.invoke('open-in-app'),
 
   // Vision and translation APIs
   extractAndTranslate: (data) => ipcRenderer.invoke('extract-and-translate', data),
@@ -20,6 +23,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onCaptureComplete: (callback) => {
     ipcRenderer.on('capture-complete', (event, result) => {
       callback(result);
+    });
+  },
+
+  onLupResult: (callback) => {
+    ipcRenderer.on('lup-result', (event, imagePath) => {
+      callback(imagePath);
     });
   },
 

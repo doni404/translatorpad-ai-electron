@@ -153,18 +153,18 @@ body {
     transform: scale(1.1);
 }
 
-.nav-item.active .nav-link {
+.nav-item.active > .nav-link {
     background: linear-gradient(135deg, #1E95D4, #D41556);
     color: white;
     transform: translateX(6px);
     box-shadow: 0 12px 32px rgba(30, 149, 212, 0.3);
 }
 
-.nav-item.active .nav-link::before {
+.nav-item.active > .nav-link::before {
     opacity: 0;
 }
 
-.nav-item.active .nav-link:hover {
+.nav-item.active > .nav-link:hover {
     transform: translateX(8px);
     box-shadow: 0 16px 40px rgba(30, 149, 212, 0.4);
 }
