@@ -3,6 +3,7 @@ let currentTranslation = null;
 let translationHistory = JSON.parse(localStorage.getItem('translationHistory') || '[]');
 let availableLanguages = [];
 let googleCloudConfigured = false;
+let currentResultData = null; // Store data for re-translation
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
@@ -73,6 +74,11 @@ function setupEventListeners() {
 
     // Use event delegation for dynamically visible buttons
     document.body.addEventListener('click', (e) => {
+        // Retranslate button in modal
+        if (e.target.id === 'retranslateBtn') {
+            retranslateCurrentResult();
+        }
+
         // Handle plan upgrade clicks from the plans page
         if (e.target.matches('.plan-button.upgrade')) {
             e.preventDefault();
@@ -144,6 +150,100 @@ function setupEventListeners() {
             });
         });
     }
+
+    // Modal close button
+    const closeModalBtn = document.getElementById('closeModal');
+    if (closeModalBtn) {
+        closeModalBtn.addEventListener('click', closeModal);
+    }
+
+    // Save buttons
+    const saveTextBtn = document.getElementById('saveTextBtn');
+    if (saveTextBtn) {
+        saveTextBtn.addEventListener('click', async () => {
+            if (currentResultData) {
+                const content = `Original Text:\n${currentResultData.originalText}\n\nTranslated Text:\n${currentResultData.translatedText}`;
+                const filename = `translation_${Date.now()}.txt`;
+                
+                const result = await window.electronAPI.saveResult({
+                    type: 'text',
+                    data: content,
+                    filename
+                });
+                
+                if (result.success) {
+                    showSuccess('Text saved successfully!');
+                } else {
+                    showError('Failed to save text');
+                }
+            }
+        });
+    }
+
+    const saveImageBtn = document.getElementById('saveImageBtn');
+    if (saveImageBtn) {
+        saveImageBtn.addEventListener('click', async () => {
+            if (currentResultData) {
+                try {
+                    showLoading(true);
+                    
+                    // Create image with translated text overlay in exact positions
+                    const translatedImageResult = await window.electronAPI.createTranslatedImage({
+                        originalImagePath: currentResultData.imagePath,
+                        originalText: currentResultData.originalText,
+                        translatedText: currentResultData.translatedText,
+                        textBlocks: currentResultData.textBlocks || []
+                    });
+                    
+                    if (translatedImageResult.success) {
+                        const filename = `translated_image_${Date.now()}.png`;
+                        
+                        const result = await window.electronAPI.saveResult({
+                            type: 'image',
+                            data: translatedImageResult.imagePath,
+                            filename
+                        });
+                        
+                        if (result.success) {
+                            showSuccess('Google Translate-style image saved successfully!');
+                        } else {
+                            showError('Failed to save translated image');
+                        }
+                    } else {
+                        showError('Failed to create translated image: ' + translatedImageResult.error);
+                    }
+                } catch (error) {
+                    showError('Error creating translated image: ' + error.message);
+                } finally {
+                    showLoading(false);
+                }
+            }
+        });
+    }
+
+    // API setup link
+    const apiSetupLink = document.getElementById('apiSetupLink');
+    if (apiSetupLink) {
+        apiSetupLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            showAPISetupInstructions();
+        });
+    }
+
+    const apiSetupLinkLegacy = document.getElementById('apiSetupLinkLegacy');
+    if (apiSetupLinkLegacy) {
+        apiSetupLinkLegacy.addEventListener('click', (e) => {
+            e.preventDefault();
+            showAPISetupInstructions();
+        });
+    }
+
+    // ESC key to close modal
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeModal();
+        }
+    });
 }
 
 // Navigation between sections
@@ -275,10 +375,10 @@ function loadHistory() {
             String(date.getMinutes()).padStart(2, '0');
         
         const detectedLang = getLanguageName(item.detectedLanguage || 'unknown');
-        const targetLang = getLanguageName(item.language || 'unknown');
+        const targetLang = getLanguageName(item.targetLanguage || 'unknown');
         
         return `
-            <div class="history-item" data-index="${index}">
+            <div class="history-item" data-index="${index}" title="Click to view details">
                 <div class="history-header">
                     <div class="history-date-lang">
                         <div class="history-date">${formattedDate}</div>
@@ -320,6 +420,22 @@ function loadHistory() {
         `;
     }).join('');
     
+    // Add event listener for each history item to open the modal
+    document.querySelectorAll('.history-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            // Don't trigger if a button inside the item was clicked
+            if (e.target.closest('.history-actions')) {
+                return;
+            }
+            const index = item.getAttribute('data-index');
+            const historyData = translationHistory[index];
+            if (historyData) {
+                currentResultData = historyData; // Set the current data
+                showTranslationResult(historyData);
+            }
+        });
+    });
+
     // Add event listeners for copy buttons
     document.querySelectorAll('.history-copy-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -348,59 +464,30 @@ function loadHistory() {
 }
 
 function showTranslationResult(translation) {
-    document.getElementById('originalText').textContent = translation.originalText;
-    document.getElementById('translatedText').textContent = translation.translatedText;
-    
-    // Show language detection info if available
-    const modalHeader = document.querySelector('.modal-header h2');
-    if (translation.detectedLanguage && translation.language) {
-        const detectedName = getLanguageName(translation.detectedLanguage);
-        const targetName = getLanguageName(translation.language);
-        modalHeader.textContent = `Translation Results (${detectedName} → ${targetName})`;
-    } else {
-        modalHeader.textContent = 'Translation Results';
-    }
-    
-    // Populate and set the target language dropdown
+    const modal = document.getElementById('resultsModal');
+    const originalTextEl = document.getElementById('originalText');
+    const translatedTextEl = document.getElementById('translatedText');
+    const modalHeader = document.querySelector('#resultsModal .modal-header h2');
     const targetLanguageSelect = document.getElementById('targetLanguageSelect');
-    if (targetLanguageSelect && availableLanguages.length > 0) {
-        // Clear existing options
-        targetLanguageSelect.innerHTML = '';
-        
-        // Sort languages with common ones first
-        const commonLanguages = ['ja', 'en', 'es', 'fr', 'de', 'ko', 'zh'];
-        const sortedLanguages = [...availableLanguages].sort((a, b) => {
-            const aIndex = commonLanguages.indexOf(a.code);
-            const bIndex = commonLanguages.indexOf(b.code);
-            
-            // If both are common languages, sort by their position in commonLanguages
-            if (aIndex !== -1 && bIndex !== -1) {
-                return aIndex - bIndex;
-            }
-            // If only a is common, put it first
-            if (aIndex !== -1) return -1;
-            // If only b is common, put it first
-            if (bIndex !== -1) return 1;
-            // If neither is common, sort alphabetically
-            return a.name.localeCompare(b.name);
-        });
-        
-        // Add all available languages
-        sortedLanguages.forEach(lang => {
-            const option = document.createElement('option');
-            option.value = lang.code;
-            option.textContent = lang.name;
-            
-            // Set as selected if it matches the current target language
-            if (lang.code === translation.language) {
-                option.selected = true;
-            }
-            
-            targetLanguageSelect.appendChild(option);
-        });
+    const retranslateBtn = document.getElementById('retranslateBtn');
+
+    if (!modal || !originalTextEl || !translatedTextEl || !modalHeader || !targetLanguageSelect || !retranslateBtn) {
+        console.error('One or more modal elements are missing from the DOM.');
+        return;
     }
     
-    document.getElementById('resultsModal').classList.add('active');
+    originalTextEl.textContent = translation.originalText;
+    translatedTextEl.textContent = translation.translatedText;
+    
+    const detectedName = getLanguageName(translation.detectedLanguage);
+    const targetName = getLanguageName(translation.targetLanguage);
+    modalHeader.textContent = `Translation Results (${detectedName} → ${targetName})`;
+    
+    targetLanguageSelect.value = translation.targetLanguage;
+
+    retranslateBtn.disabled = !translation.textBlocks || translation.textBlocks.length === 0;
+
+    modal.classList.add('active');
 }
 
 // Helper function to get language name from code
@@ -590,46 +677,12 @@ Need help? Check the README.md for detailed instructions.
 
 // Handle capture completion
 function handleCaptureComplete(result) {
-    console.log('Capture completed:', result);
-    
-    if (result.success) {
-        // --- FIX: Prevent Duplicate History ---
-        // Check if an entry with this exact ID already exists.
-        const existingEntry = translationHistory.find(item => item.id === result.id);
-        if (existingEntry) {
-            console.log('Duplicate history item detected. Ignoring.');
-            // Still show the result, just don't add another history item.
-            showTranslationResult(existingEntry);
-            return;
-        }
+    showLoading(false);
 
-        const detectedLang = result.detectedLanguage || 'unknown';
-        const targetLang = result.targetLanguage || 'ja';
-        
-        console.log(`Language detected: ${detectedLang}, translated to: ${targetLang}`);
-        console.log('Text blocks found:', result.textBlocks ? result.textBlocks.length : 0);
-        
-        currentTranslation = {
-            id: result.id, // Use the ID from the main process
-            originalText: result.originalText,
-            translatedText: result.translatedText,
-            timestamp: new Date().toISOString(),
-            imagePath: result.imagePath,
-            language: targetLang,
-            detectedLanguage: detectedLang,
-            textBlocks: result.textBlocks || []
-        };
-        
-        // Add to history
-        translationHistory.unshift(currentTranslation);
-        if (translationHistory.length > 50) {
-            translationHistory = translationHistory.slice(0, 50);
-        }
-        localStorage.setItem('translationHistory', JSON.stringify(translationHistory));
-        
-        // Show results
-        showTranslationResult(currentTranslation);
-        loadHistory();
+    if (result.success) {
+        currentResultData = result; // Store the complete result object
+        showTranslationResult(result);
+        addToHistory(result);
     } else {
         showError('Capture failed: ' + result.error);
     }
@@ -639,162 +692,6 @@ function handleCaptureComplete(result) {
 function closeModal() {
     document.getElementById('resultsModal').classList.remove('active');
 }
-
-// Add event listeners after DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    // Modal close button
-    const closeModalBtn = document.getElementById('closeModal');
-    if (closeModalBtn) {
-        closeModalBtn.addEventListener('click', closeModal);
-    }
-
-    // Save buttons
-    const saveTextBtn = document.getElementById('saveTextBtn');
-    if (saveTextBtn) {
-        saveTextBtn.addEventListener('click', async () => {
-            if (currentTranslation) {
-                const content = `Original Text:\n${currentTranslation.originalText}\n\nTranslated Text:\n${currentTranslation.translatedText}`;
-                const filename = `translation_${Date.now()}.txt`;
-                
-                const result = await window.electronAPI.saveResult({
-                    type: 'text',
-                    data: content,
-                    filename
-                });
-                
-                if (result.success) {
-                    showSuccess('Text saved successfully!');
-                } else {
-                    showError('Failed to save text');
-                }
-            }
-        });
-    }
-
-    const saveImageBtn = document.getElementById('saveImageBtn');
-    if (saveImageBtn) {
-        saveImageBtn.addEventListener('click', async () => {
-            if (currentTranslation) {
-                try {
-                    showLoading(true);
-                    
-                    // Create image with translated text overlay in exact positions
-                    const translatedImageResult = await window.electronAPI.createTranslatedImage({
-                        originalImagePath: currentTranslation.imagePath,
-                        originalText: currentTranslation.originalText,
-                        translatedText: currentTranslation.translatedText,
-                        textBlocks: currentTranslation.textBlocks || []
-                    });
-                    
-                    if (translatedImageResult.success) {
-                        const filename = `translated_image_${Date.now()}.png`;
-                        
-                        const result = await window.electronAPI.saveResult({
-                            type: 'image',
-                            data: translatedImageResult.imagePath,
-                            filename
-                        });
-                        
-                        if (result.success) {
-                            showSuccess('Google Translate-style image saved successfully!');
-                        } else {
-                            showError('Failed to save translated image');
-                        }
-                    } else {
-                        showError('Failed to create translated image: ' + translatedImageResult.error);
-                    }
-                } catch (error) {
-                    showError('Error creating translated image: ' + error.message);
-                } finally {
-                    showLoading(false);
-                }
-            }
-        });
-    }
-
-    // Retranslate button
-    const retranslateBtn = document.getElementById('retranslateBtn');
-    if (retranslateBtn) {
-        retranslateBtn.addEventListener('click', async () => {
-            if (currentTranslation) {
-                const targetLanguageSelect = document.getElementById('targetLanguageSelect');
-                const newTargetLanguage = targetLanguageSelect.value;
-                
-                if (!newTargetLanguage) {
-                    showError('Please select a target language');
-                    return;
-                }
-                
-                try {
-                    showLoading(true);
-                    
-                    // Re-translate with new language
-                    const result = await window.electronAPI.extractAndTranslate({
-                        imagePath: currentTranslation.imagePath,
-                        targetLanguage: newTargetLanguage
-                    });
-                    
-                    if (result.success) {
-                        // Update current translation
-                        currentTranslation.translatedText = result.translatedText;
-                        currentTranslation.language = newTargetLanguage;
-                        
-                        // Update the display
-                        document.getElementById('translatedText').textContent = result.translatedText;
-                        
-                        // Update the modal title with new language direction
-                        const modalHeader = document.querySelector('.modal-header h2');
-                        if (modalHeader && currentTranslation.detectedLanguage) {
-                            const detectedName = getLanguageName(currentTranslation.detectedLanguage);
-                            const targetName = getLanguageName(newTargetLanguage);
-                            modalHeader.textContent = `Translation Results (${detectedName} → ${targetName})`;
-                        }
-                        
-                        // Update history
-                        const historyIndex = translationHistory.findIndex(item => item.id === currentTranslation.id);
-                        if (historyIndex >= 0) {
-                            translationHistory[historyIndex] = currentTranslation;
-                            localStorage.setItem('translationHistory', JSON.stringify(translationHistory));
-                        }
-                        
-                        showSuccess('Text retranslated successfully!');
-                    } else {
-                        showError('Failed to retranslate: ' + result.error);
-                    }
-                } catch (error) {
-                    showError('Error during retranslation: ' + error.message);
-                } finally {
-                    showLoading(false);
-                }
-            }
-        });
-    }
-
-    // API setup link
-    const apiSetupLink = document.getElementById('apiSetupLink');
-    if (apiSetupLink) {
-        apiSetupLink.addEventListener('click', (e) => {
-            e.preventDefault();
-            showAPISetupInstructions();
-        });
-    }
-
-    // API setup link (legacy)
-    const apiSetupLinkLegacy = document.getElementById('apiSetupLinkLegacy');
-    if (apiSetupLinkLegacy) {
-        apiSetupLinkLegacy.addEventListener('click', (e) => {
-            e.preventDefault();
-            showAPISetupInstructions();
-        });
-    }
-
-    // ESC key to close modal
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            closeModal();
-        }
-    });
-});
 
 // Check Google Cloud API status
 async function checkGoogleCloudStatus() {
@@ -921,4 +818,63 @@ async function copyHistoryItem(index, type) {
         console.error('Copy failed:', error);
         showError('Copy operation failed: ' + error.message);
     }
+}
+
+async function retranslateCurrentResult() {
+    if (!currentResultData || !currentResultData.imagePath || !currentResultData.textBlocks) {
+        showToast('Not enough data to re-translate.', 'error');
+        return;
+    }
+
+    const newTargetLanguage = document.getElementById('targetLanguageSelect').value;
+    showLoading(true);
+
+    try {
+        const result = await window.electronAPI.createTranslatedImage({
+            originalImagePath: currentResultData.imagePath,
+            originalText: currentResultData.originalText,
+            textBlocks: currentResultData.textBlocks,
+            targetLanguage: newTargetLanguage
+        });
+
+        if (result.success) {
+            // Update currentResultData with the new translated info
+            currentResultData.translatedImagePath = result.imagePath;
+            currentResultData.translatedText = result.translatedText;
+            currentResultData.targetLanguage = newTargetLanguage;
+            
+            // Re-render the result view with the new data
+            showTranslationResult(currentResultData);
+            // Update the history with the new result
+            addToHistory(currentResultData);
+
+            showToast(`Retranslated to ${getLanguageName(newTargetLanguage)}`, 'success');
+        } else {
+            showError('Failed to re-translate image: ' + (result.error || 'Unknown error'));
+        }
+    } catch (error) {
+        showError('Error during re-translation: ' + error.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+function addToHistory(translation) {
+    const existingIndex = translationHistory.findIndex(item => item.imagePath === translation.imagePath);
+
+    const newEntry = { ...translation, id: `hist-${Date.now()}`, timestamp: new Date().toISOString() };
+
+    if (existingIndex > -1) {
+        // Update the existing entry to avoid duplicates but keep its original ID
+        newEntry.id = translationHistory[existingIndex].id;
+        translationHistory[existingIndex] = newEntry;
+    } else {
+        translationHistory.unshift(newEntry);
+    }
+
+    if (translationHistory.length > 50) {
+        translationHistory.pop();
+    }
+    localStorage.setItem('translationHistory', JSON.stringify(translationHistory));
+    loadHistory();
 } 

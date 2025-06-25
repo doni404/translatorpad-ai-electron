@@ -1530,9 +1530,14 @@ class App {
       // --- CORRECTED LOGIC ---
       // This button's only job is to show the main window. History is already logged.
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        console.log('Bringing main window to front.');
+        console.log('Bringing main window to front and showing last result.');
         this.mainWindow.show();
         this.mainWindow.focus();
+
+        // Also send the last result to be displayed in the modal
+        if (this.lastLupResult) {
+            this.mainWindow.webContents.send('capture-complete', this.lastLupResult);
+        }
         
         if (this.captureWindow) {
           this.captureWindow.close();
@@ -1616,15 +1621,20 @@ class App {
       }
     });
 
-    ipcMain.handle('create-translated-image', async (event, { originalImagePath, originalText, translatedText, textBlocks }) => {
+    ipcMain.handle('create-translated-image', async (event, { originalImagePath, originalText, textBlocks, targetLanguage }) => {
       try {
+        // The screenshot service now correctly uses the passed targetLanguage
         const result = await this.screenshotService.createImageWithTranslation(
           originalImagePath, 
           originalText, 
-          textBlocks,  // textBlocks should be 3rd parameter
-          this.targetLanguage  // targetLanguage should be 4th parameter
+          textBlocks,
+          targetLanguage
         );
-        return { success: true, imagePath: result.translatedImagePath };
+        return { 
+          success: true, 
+          imagePath: result.translatedImagePath,
+          translatedText: result.fullTranslatedText // <-- Return the new text
+        };
       } catch (error) {
         console.error('Error creating translated image:', error);
         return { success: false, error: error.message };
@@ -2064,6 +2074,7 @@ class App {
 
       const originalImagePath = filePaths[0];
       console.log(`Image opened: ${originalImagePath}`);
+      console.log(`[File Open] Using target language from main process: ${this.targetLanguage}`);
 
       // 1. Ensure the temp directory exists
       const tempDir = path.join(app.getPath('userData'), 'temp');

@@ -1,7 +1,7 @@
 {
-  "name": "g-pad-ai",
-  "version": "1.0.0",
-  "description": "Gloding Pad AI - Advanced screenshot translator for macOS",
+  "name": "transpad-ai",
+  "version": "1.0.1",
+  "description": "TransPad AI - Advanced screenshot translator for macOS",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
@@ -20,8 +20,8 @@
     "translation",
     "vision-api",
     "macos",
-    "gloding-pad",
-    "g-pad",
+    "transpad",
+    "transpad-ai",
     "ai"
   ],
   "author": "GLODING, Inc.",
@@ -44,7 +44,7 @@
     "sharp": "^0.32.6"
   },
   "build": {
-    "appId": "com.gloding.gpad-ai",
+    "appId": "com.gloding.transpad-ai",
     "productName": "TransPad AI",
     "copyright": "Copyright © 2025 GLODING, Inc.",
     "directories": {
