@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, desktopCapturer, dialog, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, desktopCapturer, dialog, systemPreferences, Menu, clipboard, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { VisionService } = require('./services/visionService');
@@ -16,6 +16,7 @@ class App {
     this.globalShortcutInProgress = false; // Prevent duplicate shortcut calls
     this.lastShortcutTime = 0; // Add cooldown tracking
     this.lastLupResult = null; // Store the last lup result for the "Open in App" feature
+    this.targetLanguage = 'en'; // Default target language: English
     
     this.init();
   }
@@ -64,6 +65,9 @@ class App {
 
     this.mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
+    // Create and set the application menu
+    this.createMenu();
+
     // Only open dev tools if explicitly requested
     const isDev = process.argv.includes('--dev');
     if (isDev && process.argv.includes('--debug')) {
@@ -73,6 +77,144 @@ class App {
     this.mainWindow.on('closed', () => {
       this.mainWindow = null;
     });
+  }
+
+  createMenu() {
+    const template = [
+      {
+        label: 'G-Pad AI',
+        submenu: [
+          {
+            label: 'About G-Pad AI',
+            role: 'about'
+          },
+          { type: 'separator' },
+          {
+            label: 'Hide G-Pad AI',
+            accelerator: 'Command+H',
+            role: 'hide'
+          },
+          {
+            label: 'Hide Others',
+            accelerator: 'Command+Alt+H',
+            role: 'hideothers'
+          },
+          {
+            label: 'Show All',
+            role: 'unhide'
+          },
+          { type: 'separator' },
+          {
+            label: 'Quit',
+            accelerator: 'Command+Q',
+            click: () => {
+              app.quit();
+            }
+          }
+        ]
+      },
+      {
+        label: 'Translation',
+        submenu: [
+          {
+            label: 'Capture & Translate',
+            accelerator: 'CommandOrControl+Shift+S',
+            click: () => {
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.webContents.send('trigger-capture');
+              }
+            }
+          },
+          { type: 'separator' },
+          {
+            label: 'Target Language',
+            submenu: [
+              {
+                label: '🇯🇵 Any → Japanese',
+                accelerator: 'CommandOrControl+1',
+                type: 'radio',
+                checked: this.targetLanguage === 'ja',
+                click: () => {
+                  this.setTargetLanguage('ja');
+                }
+              },
+              {
+                label: '🇺🇸 Any → English',
+                accelerator: 'CommandOrControl+2', 
+                type: 'radio',
+                checked: this.targetLanguage === 'en',
+                click: () => {
+                  this.setTargetLanguage('en');
+                }
+              },
+              {
+                label: '🇮🇩 Any → Indonesian',
+                accelerator: 'CommandOrControl+3',
+                type: 'radio', 
+                checked: this.targetLanguage === 'id',
+                click: () => {
+                  this.setTargetLanguage('id');
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        label: 'View',
+        submenu: [
+          {
+            label: 'Reload',
+            accelerator: 'CommandOrControl+R',
+            click: (item, focusedWindow) => {
+              if (focusedWindow) {
+                focusedWindow.reload();
+              }
+            }
+          },
+          {
+            label: 'Toggle Developer Tools',
+            accelerator: 'F12',
+            click: (item, focusedWindow) => {
+              if (focusedWindow) {
+                focusedWindow.webContents.toggleDevTools();
+              }
+            }
+          },
+          { type: 'separator' },
+          {
+            label: 'Minimize',
+            accelerator: 'CommandOrControl+M',
+            role: 'minimize'
+          },
+          {
+            label: 'Close',
+            accelerator: 'CommandOrControl+W',
+            role: 'close'
+          }
+        ]
+      }
+    ];
+
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
+  }
+
+  setTargetLanguage(language) {
+    this.targetLanguage = language;
+    console.log(`Target language set to: ${language}`);
+    
+    // Update the menu to reflect the new selection
+    this.createMenu();
+    
+    // Notify renderer process and any open capture windows
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('target-language-changed', language);
+    }
+    
+    if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+      this.captureWindow.webContents.send('target-language-changed', language);
+    }
   }
 
   createCaptureOverlay() {
@@ -138,6 +280,19 @@ class App {
                 width: 100%;
                 height: 100%;
             }
+            #language-indicator {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                background: rgba(0,0,0,0.7);
+                color: white;
+                padding: 4px 8px;
+                border-radius: 12px;
+                font-size: 12px;
+                font-weight: 600;
+                -webkit-app-region: no-drag;
+                z-index: 10;
+            }
             #controls {
                 position: absolute;
                 top: 15px;
@@ -165,10 +320,54 @@ class App {
                 background: rgba(0,0,0,0.7);
                 transform: scale(1.1);
             }
+            
+            /* Copy dropdown positioned outside the Lup */
+            #copyDropdown {
+                position: absolute;
+                top: 70px;
+                right: 15px;
+                background: rgba(0,0,0,0.85);
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 12px;
+                min-width: 160px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                display: none;
+                flex-direction: column;
+                overflow: hidden;
+                z-index: 1000;
+                -webkit-app-region: no-drag;
+            }
+            
+            .copy-option {
+                padding: 10px 14px;
+                color: white;
+                font-size: 13px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.2s ease;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                border: none;
+                background: transparent;
+                text-align: left;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                white-space: nowrap;
+            }
+            
+            .copy-option:hover {
+                background: rgba(255,255,255,0.15);
+            }
+            
+            .copy-option:not(:last-child) {
+                border-bottom: 1px solid rgba(255,255,255,0.1);
+            }
         </style>
     </head>
     <body>
         <div id="container">
+            <div id="language-indicator">Any → English</div>
             <div id="result-container">
                  <img id="resultImage" />
             </div>
@@ -176,8 +375,17 @@ class App {
         <div id="controls">
             <button id="captureBtn" class="btn" title="Capture & Translate">📸</button>
             <button id="clearBtn" class="btn" title="Clear Translation" style="display: none;">🔄</button>
+            <button id="copyBtn" class="btn" title="Copy Result" style="display: none;">📋</button>
             <button id="openInAppBtn" class="btn" title="Open in App" style="display: none;">↗️</button>
             <button id="closeBtn" class="btn" title="Close Lup">❌</button>
+        </div>
+        
+        <!-- Copy dropdown positioned outside the Lup frame -->
+        <div id="copyDropdown">
+            <button class="copy-option" id="copyOriginalImage">📸 Copy Original Image</button>
+            <button class="copy-option" id="copyTranslatedImage">🖼️ Copy Translated Image</button>
+            <button class="copy-option" id="copyOriginalText">📄 Copy Original Text</button>
+            <button class="copy-option" id="copyTranslatedText">📝 Copy Translated Text</button>
         </div>
 
         <script>
@@ -185,8 +393,30 @@ class App {
             const clearBtn = document.getElementById('clearBtn');
             const closeBtn = document.getElementById('closeBtn');
             const openInAppBtn = document.getElementById('openInAppBtn');
+            const copyBtn = document.getElementById('copyBtn');
+            const copyDropdown = document.getElementById('copyDropdown');
+            const copyOriginalImage = document.getElementById('copyOriginalImage');
+            const copyTranslatedImage = document.getElementById('copyTranslatedImage');
+            const copyOriginalText = document.getElementById('copyOriginalText');
+            const copyTranslatedText = document.getElementById('copyTranslatedText');
             const resultContainer = document.getElementById('result-container');
             const resultImage = document.getElementById('resultImage');
+            const languageIndicator = document.getElementById('language-indicator');
+
+            // Store the current result data for copying
+            let currentResult = null;
+
+            // Language display mapping
+            const languageLabels = {
+                'ja': 'Any → Japanese',
+                'en': 'Any → English', 
+                'id': 'Any → Indonesian'
+            };
+
+            // Update language indicator when target language changes
+            window.electronAPI.onTargetLanguageChanged((language) => {
+                languageIndicator.textContent = languageLabels[language] || 'Any → English';
+            });
 
             captureBtn.addEventListener('click', () => {
                 captureBtn.style.display = 'none'; // Hide capture button
@@ -200,13 +430,109 @@ class App {
             clearBtn.addEventListener('click', () => {
                 resultContainer.style.display = 'none'; // Hide image
                 clearBtn.style.display = 'none'; // Hide self
+                copyBtn.style.display = 'none'; // Hide copy button
                 openInAppBtn.style.display = 'none'; // Hide open in app button
                 captureBtn.style.display = 'flex'; // Show capture button again
-                // No need to call main process, reset is purely UI now
+                copyDropdown.style.display = 'none'; // Hide dropdown
+                currentResult = null; // Clear result data
             });
 
             openInAppBtn.addEventListener('click', () => {
                 window.electronAPI.openInApp();
+            });
+
+            // Copy button dropdown functionality
+            copyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (currentResult) {
+                    const isVisible = copyDropdown.style.display === 'flex';
+                    copyDropdown.style.display = isVisible ? 'none' : 'flex';
+                }
+            });
+
+            // Copy original image
+            copyOriginalImage.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                copyDropdown.style.display = 'none';
+                
+                if (currentResult && currentResult.originalImageDataUrl) {
+                    try {
+                        await window.electronAPI.copyAsImage(currentResult.originalImageDataUrl);
+                        showCopyFeedback(true, '📸');
+                    } catch (error) {
+                        console.error('Failed to copy original image:', error);
+                        showCopyFeedback(false, '📸');
+                    }
+                }
+            });
+
+            // Copy translated image
+            copyTranslatedImage.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                copyDropdown.style.display = 'none';
+                
+                if (currentResult && currentResult.translatedImageDataUrl) {
+                    try {
+                        await window.electronAPI.copyAsImage(currentResult.translatedImageDataUrl);
+                        showCopyFeedback(true, '🖼️');
+                    } catch (error) {
+                        console.error('Failed to copy translated image:', error);
+                        showCopyFeedback(false, '🖼️');
+                    }
+                }
+            });
+
+            // Copy original text
+            copyOriginalText.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                copyDropdown.style.display = 'none';
+                
+                if (currentResult && currentResult.originalText) {
+                    try {
+                        await window.electronAPI.copyAsText(currentResult.originalText);
+                        showCopyFeedback(true, '📄');
+                    } catch (error) {
+                        console.error('Failed to copy original text:', error);
+                        showCopyFeedback(false, '📄');
+                    }
+                }
+            });
+
+            // Copy translated text
+            copyTranslatedText.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                copyDropdown.style.display = 'none';
+                
+                if (currentResult && currentResult.translatedText) {
+                    try {
+                        await window.electronAPI.copyAsText(currentResult.translatedText);
+                        showCopyFeedback(true, '📝');
+                    } catch (error) {
+                        console.error('Failed to copy translated text:', error);
+                        showCopyFeedback(false, '📝');
+                    }
+                }
+            });
+
+            // Helper function for copy feedback
+            function showCopyFeedback(success, icon) {
+                if (success) {
+                    copyBtn.style.background = 'rgba(34, 197, 94, 0.7)';
+                    copyBtn.textContent = '✅';
+                } else {
+                    copyBtn.style.background = 'rgba(239, 68, 68, 0.7)';
+                    copyBtn.textContent = '❌';
+                }
+                
+                setTimeout(() => {
+                    copyBtn.style.background = 'rgba(0,0,0,0.5)';
+                    copyBtn.textContent = '📋';
+                }, 1500);
+            }
+
+            // Close dropdown when clicking elsewhere
+            document.addEventListener('click', () => {
+                copyDropdown.style.display = 'none';
             });
 
             // Listen for the translated image from main process
@@ -214,7 +540,32 @@ class App {
                 resultImage.src = imageDataUrl;
                 resultContainer.style.display = 'block';
                 clearBtn.style.display = 'flex'; // Show clear button
+                copyBtn.style.display = 'flex'; // Show copy button
                 openInAppBtn.style.display = 'flex'; // Show open in app button
+                
+                // Store the translated image data for copying
+                if (currentResult) {
+                    currentResult.translatedImageDataUrl = imageDataUrl;
+                } else {
+                    currentResult = { translatedImageDataUrl: imageDataUrl };
+                }
+            });
+
+            // Listen for result data updates (we'll need this for text copying)
+            window.electronAPI.onLupResultData((resultData) => {
+                if (currentResult) {
+                    currentResult.translatedText = resultData.translatedText;
+                    currentResult.originalText = resultData.originalText;
+                    currentResult.detectedLanguage = resultData.detectedLanguage;
+                    currentResult.targetLanguage = resultData.targetLanguage;
+                }
+            });
+
+            // Listen for original image data
+            window.electronAPI.onOriginalImageData((originalImageDataUrl) => {
+                if (currentResult) {
+                    currentResult.originalImageDataUrl = originalImageDataUrl;
+                }
             });
 
             // ESC key to cancel
@@ -234,6 +585,9 @@ class App {
       this.captureWindow.show();
       this.captureWindow.focus();
       this.captureWindow.setAlwaysOnTop(true, 'screen-saver');
+      
+      // Send current target language to the capture window
+      this.captureWindow.webContents.send('target-language-changed', this.targetLanguage);
     });
 
     // Handle window close
@@ -495,10 +849,13 @@ class App {
         
         const extractionResult = await this.visionService.extractText(imagePath);
         
+        // Use the selected target language instead of auto-detection
+        console.log(`Using selected target language: ${this.targetLanguage}`);
         const translationResult = await this.screenshotService.createImageWithTranslation(
           imagePath, 
           extractionResult.fullText, 
-          extractionResult.textBlocks
+          extractionResult.textBlocks,
+          this.targetLanguage  // Pass the selected target language
         );
 
         this.lastLupResult = {
@@ -508,7 +865,7 @@ class App {
           translatedText: translationResult.fullTranslatedText,
           imagePath: imagePath,
           detectedLanguage: translationResult.detectedLanguage,
-          targetLanguage: translationResult.targetLanguage,
+          targetLanguage: this.targetLanguage, // Use selected target language
           textBlocks: extractionResult.textBlocks
         };
         
@@ -524,6 +881,19 @@ class App {
           const imageBuffer = fs.readFileSync(translationResult.translatedImagePath);
           const dataUrl = `data:image/png;base64,${imageBuffer.toString('base64')}`;
           this.captureWindow.webContents.send('lup-result', dataUrl);
+          
+          // Also send the original image data for copying
+          const originalImageBuffer = fs.readFileSync(imagePath);
+          const originalDataUrl = `data:image/png;base64,${originalImageBuffer.toString('base64')}`;
+          this.captureWindow.webContents.send('original-image-data', originalDataUrl);
+          
+          // Also send the result data for text copying
+          this.captureWindow.webContents.send('lup-result-data', {
+            originalText: extractionResult.fullText,
+            translatedText: translationResult.fullTranslatedText,
+            detectedLanguage: translationResult.detectedLanguage,
+            targetLanguage: this.targetLanguage
+          });
         }
 
         this.globalShortcutInProgress = false;
@@ -663,6 +1033,31 @@ class App {
       if (this.mainWindow) {
         this.mainWindow.restore();
         this.mainWindow.focus();
+      }
+    });
+
+    // Clipboard operations
+    ipcMain.handle('copy-as-image', async (event, imageDataUrl) => {
+      try {
+        // Convert data URL to native image
+        const image = nativeImage.createFromDataURL(imageDataUrl);
+        clipboard.writeImage(image);
+        console.log('Image copied to clipboard successfully');
+        return { success: true };
+      } catch (error) {
+        console.error('Error copying image to clipboard:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('copy-as-text', async (event, text) => {
+      try {
+        clipboard.writeText(text);
+        console.log('Text copied to clipboard successfully');
+        return { success: true };
+      } catch (error) {
+        console.error('Error copying text to clipboard:', error);
+        return { success: false, error: error.message };
       }
     });
   }

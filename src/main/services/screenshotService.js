@@ -380,9 +380,9 @@ class ScreenshotService {
   }
 
   // CORE TEXT REPLACEMENT METHOD - Paragraph-by-paragraph translation with precise overlays
-  async createImageWithTranslation(originalImagePath, originalText, textBlocks) {
+  async createImageWithTranslation(originalImagePath, originalText, textBlocks, targetLanguage = null) {
     try {
-      console.log('🔄 Starting paragraph-by-paragraph text replacement with auto-language detection...');
+      console.log('🔄 Starting paragraph-by-paragraph text replacement...');
       
       const timestamp = Date.now();
       const outputPath = path.join(this.tempDir, `translated_${timestamp}.png`);
@@ -393,23 +393,39 @@ class ScreenshotService {
       if (!textBlocks || textBlocks.length === 0) {
         console.log('⚠️ No text blocks found, returning original image');
         fs.copyFileSync(originalImagePath, outputPath);
-        return { translatedImagePath: outputPath, fullTranslatedText: originalText, detectedLanguage: 'unknown', targetLanguage: 'unknown' };
+        return { translatedImagePath: outputPath, fullTranslatedText: originalText, detectedLanguage: 'unknown', targetLanguage: targetLanguage || 'unknown' };
       }
       
-      // Auto-detect language from the full text to determine target language
-      let targetLanguage = 'ja';
+      // Use provided target language or auto-detect
+      let finalTargetLanguage = targetLanguage;
       let detectedLanguage = 'unknown';
-      try {
-        const detectionResult = await this.translationService.detectLanguage(originalText);
-        console.log('Detected language for translation:', detectionResult);
-        if (detectionResult && detectionResult.language === 'ja') {
-          targetLanguage = 'en';
+      
+      if (!finalTargetLanguage) {
+        // Auto-detect language from the full text to determine target language (legacy behavior)
+        try {
+          const detectionResult = await this.translationService.detectLanguage(originalText);
+          console.log('Detected language for translation:', detectionResult);
+          if (detectionResult && detectionResult.language === 'ja') {
+            finalTargetLanguage = 'en';
+          } else {
+            finalTargetLanguage = 'ja';
+          }
+          detectedLanguage = detectionResult.language || 'unknown';
+        } catch (error) {
+          console.warn('Language detection failed, defaulting to Japanese target language.', error.message);
+          finalTargetLanguage = 'ja';
         }
-        detectedLanguage = detectionResult.language || 'unknown';
-      } catch (error) {
-        console.warn('Language detection failed, defaulting to Japanese target language.', error.message);
+      } else {
+        console.log(`Using provided target language: ${finalTargetLanguage}`);
+        // Still detect source language for logging purposes
+        try {
+          const detectionResult = await this.translationService.detectLanguage(originalText);
+          detectedLanguage = detectionResult.language || 'unknown';
+          console.log(`Detected source language: ${detectedLanguage}, translating to: ${finalTargetLanguage}`);
+        } catch (error) {
+          console.warn('Source language detection failed, but proceeding with translation.', error.message);
+        }
       }
-      console.log(`Target translation language set to: ${targetLanguage}`);
 
       // Extract paragraphs from the DOCUMENT_TEXT_DETECTION structure
       const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks);
@@ -423,7 +439,7 @@ class ScreenshotService {
           // Translate this paragraph individually
           const translatedParagraphText = await this.translationService.translateText(
             paragraph.text, 
-            targetLanguage
+            finalTargetLanguage
           );
           translatedParagraphs.push(translatedParagraphText);
           
@@ -448,7 +464,7 @@ class ScreenshotService {
         translatedImagePath: outputPath,
         fullTranslatedText: translatedParagraphs.join(' '),
         detectedLanguage,
-        targetLanguage,
+        targetLanguage: finalTargetLanguage,
       };
       
     } catch (error) {

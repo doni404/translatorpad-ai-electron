@@ -87,6 +87,13 @@ function setupEventListeners() {
     window.electronAPI.onResetToHome(() => {
         closeModal();
     });
+
+    // Listen for trigger-capture event from menu
+    if (window.electronAPI.onTriggerCapture) {
+        window.electronAPI.onTriggerCapture(() => {
+            startCapture();
+        });
+    }
 }
 
 // Navigation between sections

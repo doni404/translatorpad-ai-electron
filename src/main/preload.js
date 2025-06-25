@@ -32,6 +32,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
     });
   },
 
+  // Lup result data listener
+  onLupResultData: (callback) => {
+    ipcRenderer.on('lup-result-data', (event, resultData) => {
+      callback(resultData);
+    });
+  },
+
+  // Original image data listener
+  onOriginalImageData: (callback) => {
+    ipcRenderer.on('original-image-data', (event, originalImageDataUrl) => {
+      callback(originalImageDataUrl);
+    });
+  },
+
+  // Clipboard operations
+  copyAsImage: (imageDataUrl) => ipcRenderer.invoke('copy-as-image', imageDataUrl),
+  copyAsText: (text) => ipcRenderer.invoke('copy-as-text', text),
+
+  // Target language change listener
+  onTargetLanguageChanged: (callback) => {
+    ipcRenderer.on('target-language-changed', (event, language) => {
+      callback(language);
+    });
+  },
+
+  // Trigger capture listener
+  onTriggerCapture: (callback) => {
+    ipcRenderer.on('trigger-capture', (event) => {
+      callback();
+    });
+  },
+
   // Toast message listener
   onShowToast: (callback) => {
     ipcRenderer.on('show-toast', (event, data) => {
