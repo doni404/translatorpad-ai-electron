@@ -7,13 +7,13 @@ const { app } = require('electron');
 const { TranslationService } = require('./translationService');
 
 class ScreenshotService {
-  constructor() {
+  constructor(translationService) {
     // Use system temp directory instead of app directory
     this.tempDir = path.join(os.tmpdir(), 'g-pad-ai-screenshots');
     this.ensureTempDir();
     
-    // Initialize translation service for individual paragraph translation
-    this.translationService = new TranslationService();
+    // Use the provided translation service instance
+    this.translationService = translationService;
   }
 
   ensureTempDir() {
@@ -384,8 +384,22 @@ class ScreenshotService {
     try {
       console.log('🖼️ Creating new image with translated text...');
       console.log(`Using target language: ${targetLanguage || 'Default'}`);
+
+      // Detect source language for better UI display
+      let detectedLanguage = 'unknown';
+      if (originalText && originalText.trim()) {
+        try {
+          const detectionResult = await this.translationService.detectLanguage(originalText);
+          if (detectionResult) {
+            detectedLanguage = detectionResult.language || 'unknown';
+          }
+        } catch (e) {
+          console.warn('Could not detect source language', e.message);
+        }
+      }
+      console.log(`Detected source language: ${detectedLanguage}`);
       
-      const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks);
+      const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks, originalImagePath);
       console.log(`Found ${paragraphs.length} paragraphs to process`);
 
       const overlays = [];
@@ -399,15 +413,15 @@ class ScreenshotService {
       // Translate paragraph by paragraph
       for (const paragraph of paragraphs) {
         try {
-          const translation = await this.translationService.translateText(paragraph.text, targetLanguage);
+          const translatedText = await this.translationService.translateText(paragraph.text, targetLanguage);
           
-          if (translation && translation.translatedText) {
-            fullTranslatedText += translation.translatedText + '\n';
+          if (translatedText) {
+            fullTranslatedText += translatedText + '\n';
             
             // Generate overlay for this translated paragraph
             const overlay = await this.createParagraphOverlay(
               paragraph, 
-              translation.translatedText, 
+              translatedText, 
               imageWidth, // Pass image width
               imageHeight // Pass image height
             );
@@ -434,7 +448,7 @@ class ScreenshotService {
       return {
         translatedImagePath,
         fullTranslatedText: fullTranslatedText.trim(),
-        detectedLanguage: 'mixed' // Since we translate per paragraph
+        detectedLanguage: detectedLanguage
       };
 
     } catch (error) {
@@ -444,7 +458,7 @@ class ScreenshotService {
   }
 
   // Extract paragraphs from DOCUMENT_TEXT_DETECTION textBlocks
-  extractParagraphsFromTextBlocks(textBlocks) {
+  extractParagraphsFromTextBlocks(textBlocks, originalImagePath) {
     console.log('📋 Extracting paragraphs from DOCUMENT_TEXT_DETECTION structure...');
     
     // Validate textBlocks parameter
@@ -531,13 +545,14 @@ class ScreenshotService {
       const paragraph = {
         text: paragraphText,
         boundingBox: {
-          left,
-          top,
-          width: right - left,
-          height: bottom - top
+          minX: left,
+          minY: top,
+          maxX: right,
+          maxY: bottom,
         },
         words: paragraphGroup.words,
-        hierarchy: paragraphGroup.hierarchy
+        hierarchy: paragraphGroup.hierarchy,
+        imagePath: originalImagePath // Pass image path for color sampling
       };
       
       paragraphs.push(paragraph);
@@ -580,35 +595,63 @@ class ScreenshotService {
         return null; // Ignore empty boxes
       }
 
+      // --- FIX: Add a simple dynamic font size calculation ---
+      const estimatedCharsPerLine = Math.max(1, (width / 10)); // Assume avg char width is ~10px
+      const estimatedLines = Math.ceil(translatedText.length / estimatedCharsPerLine);
+      let fontSize = Math.floor(height / Math.max(1, estimatedLines) * 0.75); // Use 75% of available line height
+      fontSize = Math.max(12, Math.min(fontSize, 40)); // Clamp font size to be readable
+      console.log(`🔠 Calculated font size: ${fontSize}px for paragraph`);
+
       // 2. Sample the background color from the original image at this position
       const backgroundColor = await this.sampleBackgroundColor(paragraph.imagePath, paragraph.boundingBox);
       
       // 3. Determine a contrasting text color
       const textColor = this.getContrastingTextColor(backgroundColor);
 
-      // 4. Create the text overlay itself
-      const textOverlay = await this.createParagraphTextOverlay(
+      // 4. Create the text overlay SVG, now with the correct background color.
+      const svgTextOverlay = this.createParagraphTextOverlay(
         translatedText, 
         { width, height }, 
+        fontSize,
         textColor, 
-        'transparent' // Use transparent background for the text SVG
+        backgroundColor
       );
 
-      // --- CRITICAL FIX ---
-      // Create a solid color background overlay that perfectly matches the paragraph's bounding box
-      const backgroundOverlay = await sharp({
-        create: {
-          width: width,
-          height: height,
-          channels: 4,
-          background: backgroundColor
-        }
-      }).png().toBuffer();
+      if (!svgTextOverlay) {
+        console.warn('⚠️ SVG text overlay generation failed.');
+        return null;
+      }
 
-      // 5. Composite the text onto the colored background
-      const combinedOverlayBuffer = await sharp(backgroundOverlay)
-        .composite([{ input: textOverlay }])
-        .toBuffer();
+      // 5. The SVG now contains the background and text. Just convert it to a buffer.
+      let combinedOverlayBuffer = Buffer.from(svgTextOverlay);
+
+      // --- FIX: Check if overlay exceeds image boundaries and crop if necessary ---
+      const overlayMetadata = await sharp(combinedOverlayBuffer).metadata();
+      
+      let finalWidth = overlayMetadata.width;
+      let finalHeight = overlayMetadata.height;
+      let clipped = false;
+
+      if (minX + finalWidth > imageWidth) {
+        finalWidth = imageWidth - minX;
+        clipped = true;
+      }
+      if (minY + finalHeight > imageHeight) {
+        finalHeight = imageHeight - minY;
+        clipped = true;
+      }
+
+      if (clipped) {
+        console.log(`✂️ Overlay for paragraph at (${minX}, ${minY}) would exceed image boundaries. Clipping to fit.`);
+        if (finalWidth > 0 && finalHeight > 0) {
+          combinedOverlayBuffer = await sharp(combinedOverlayBuffer)
+            .extract({ left: 0, top: 0, width: finalWidth, height: finalHeight })
+            .toBuffer();
+        } else {
+          console.warn('⚠️ Overlay is entirely outside image bounds, skipping.');
+          return null;
+        }
+      }
 
       return {
         input: combinedOverlayBuffer,
@@ -785,12 +828,17 @@ class ScreenshotService {
   // Enhanced background color sampling with better fallback
   async sampleBackgroundColor(imagePath, boundingBox) {
     try {
+      // --- FIX: Use correct bounding box properties (minX/minY) ---
+      const { minX, minY, maxX, maxY } = boundingBox;
+      const width = maxX - minX;
+      const height = maxY - minY;
+
       // Sample area around the text bounding box for better color detection
       const sampleMargin = 8;
-      const sampleX = Math.max(0, boundingBox.left - sampleMargin);
-      const sampleY = Math.max(0, boundingBox.top - sampleMargin);
-      const sampleWidth = Math.min(50, boundingBox.width + (sampleMargin * 2));
-      const sampleHeight = Math.min(50, boundingBox.height + (sampleMargin * 2));
+      const sampleX = Math.max(0, minX - sampleMargin);
+      const sampleY = Math.max(0, minY - sampleMargin);
+      const sampleWidth = Math.min(50, width + (sampleMargin * 2));
+      const sampleHeight = Math.min(50, height + (sampleMargin * 2));
       
       const { data, info } = await sharp(imagePath)
         .extract({

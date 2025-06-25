@@ -12,7 +12,7 @@ class App {
     this.miniGalleryWindow = null; // New persistent gallery window
     this.visionService = new VisionService();
     this.translationService = new TranslationService();
-    this.screenshotService = new ScreenshotService();
+    this.screenshotService = new ScreenshotService(this.translationService);
     this.hasUsedCaptureSuccessfully = false;
     this.globalShortcutInProgress = false; // Prevent duplicate shortcut calls
     this.lastShortcutTime = 0; // Add cooldown tracking
