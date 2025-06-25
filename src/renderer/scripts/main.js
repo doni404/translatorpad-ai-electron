@@ -71,9 +71,44 @@ function setupEventListeners() {
         clearHistoryBtn.addEventListener('click', clearHistory);
     }
 
+    // Use event delegation for dynamically visible buttons
+    document.body.addEventListener('click', (e) => {
+        // Handle plan upgrade clicks from the plans page
+        if (e.target.matches('.plan-button.upgrade')) {
+            e.preventDefault();
+            showToast('Upgrade feature is coming soon!', 'info');
+        }
+
+        // Handle About page links
+        if (e.target.matches('.about-link')) {
+            e.preventDefault();
+            const linkType = e.target.getAttribute('data-link');
+            let url;
+            switch (linkType) {
+                case 'bug':
+                    url = 'https://gloding.com/contact';
+                    break;
+                case 'website':
+                    url = 'https://gloding.com';
+                    break;
+                case 'check-update':
+                    showToast('You are using the latest version!', 'success');
+                    return;
+            }
+            if (url && window.electronAPI && window.electronAPI.openExternalLink) {
+                window.electronAPI.openExternalLink(url);
+            }
+        }
+    });
+
     // Listen for capture completion
     window.electronAPI.onCaptureComplete((result) => {
         handleCaptureComplete(result);
+    });
+
+    // Listen for 'About' from menu
+    window.electronAPI.onShowAboutPage(() => {
+        showSection('about');
     });
 
     // Listen for toast messages from main process
@@ -92,6 +127,16 @@ function setupEventListeners() {
     if (window.electronAPI.onTriggerCapture) {
         window.electronAPI.onTriggerCapture(() => {
             startCapture();
+        });
+    }
+
+    // Plans page buttons
+    const upgradeButtons = document.querySelectorAll('.plan-button.upgrade');
+    if (upgradeButtons) {
+        upgradeButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                showToast('Upgrade feature is coming soon!', 'info');
+            });
         });
     }
 }
@@ -413,66 +458,46 @@ function showToast(message, type = 'info') {
 
     // Create toast element
     const toast = document.createElement('div');
-    toast.className = `toast-notification toast-${type}`;
+    toast.className = 'toast-notification';
     
-    // Set icon based on type
-    let icon = '';
+    let iconClass = 'fa-info-circle';
+    let iconColor = '#1E95D4';
+
     switch (type) {
         case 'success':
-            icon = '<i class="fas fa-check-circle"></i>';
+            iconClass = 'fa-check-circle';
+            iconColor = '#48bb78';
             break;
         case 'error':
-            icon = '<i class="fas fa-exclamation-circle"></i>';
-            break;
-        case 'info':
-        default:
-            icon = '<i class="fas fa-info-circle"></i>';
+            iconClass = 'fa-exclamation-circle';
+            iconColor = '#e53e3e';
             break;
     }
     
     toast.innerHTML = `
-        ${icon}
-        <span>${message}</span>
+        <div class="toast-icon">
+            <i class="fas ${iconClass}"></i>
+        </div>
+        <div class="toast-content">
+            <p class="toast-message">${message}</p>
+        </div>
+        <div class="toast-progress"></div>
     `;
     
-    // Add styles
-    toast.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: ${type === 'error' ? '#EF4444' : type === 'success' ? '#10B981' : '#6366F1'};
-        color: white;
-        padding: 16px 20px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        font-weight: 500;
-        font-size: 14px;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
-        z-index: 10000;
-        transform: translateX(100%);
-        transition: transform 0.3s ease;
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-    `;
-    
-    // Add to document
     document.body.appendChild(toast);
     
+    toast.querySelector('.toast-icon i').style.color = iconColor;
+
     // Animate in
     setTimeout(() => {
-        toast.style.transform = 'translateX(0)';
+        toast.classList.add('show');
     }, 100);
     
     // Auto remove after 3 seconds
     setTimeout(() => {
-        toast.style.transform = 'translateX(100%)';
-        setTimeout(() => {
-            if (toast.parentNode) {
-                toast.remove();
-            }
-        }, 300);
+        toast.classList.remove('show');
+        // Remove from DOM after animation ends
+        toast.addEventListener('transitionend', () => toast.remove());
     }, 3000);
 }
 

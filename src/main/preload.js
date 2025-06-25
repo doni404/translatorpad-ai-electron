@@ -12,8 +12,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openInApp: () => ipcRenderer.invoke('open-in-app'),
 
   // Vision and translation APIs
-  extractAndTranslate: (data) => ipcRenderer.invoke('extract-and-translate', data),
-  getLanguages: () => ipcRenderer.invoke('get-languages'),
+  extractAndTranslate: async (options) => ipcRenderer.invoke('extract-and-translate', options),
+  getLanguages: async () => ipcRenderer.invoke('get-languages'),
 
   // File operations
   saveResult: (data) => ipcRenderer.invoke('save-result', data),
@@ -88,5 +88,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Remove listeners
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners();
+  },
+
+  // New function
+  openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
+
+  // New listener
+  onResetToHome: (callback) => {
+    ipcRenderer.on('reset-to-home', () => callback());
+  },
+
+  // --- New listener for About page ---
+  onShowAboutPage: (callback) => {
+    ipcRenderer.on('show-about-page', () => callback());
   }
 }); 

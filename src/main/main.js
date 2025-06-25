@@ -94,7 +94,11 @@ class App {
         submenu: [
           {
             label: 'About TransPad AI',
-            role: 'about'
+            click: () => {
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.webContents.send('show-about-page');
+              }
+            }
           },
           { type: 'separator' },
           {
@@ -1507,7 +1511,12 @@ class App {
     });
 
     ipcMain.handle('get-languages', async () => {
-      return await this.translationService.getSupportedLanguages();
+      return this.translationService.getSupportedLanguages();
+    });
+
+    ipcMain.on('open-external-link', (event, url) => {
+      const { shell } = require('electron');
+      shell.openExternal(url);
     });
 
     ipcMain.handle('save-result', async (event, { type, data, filename }) => {
