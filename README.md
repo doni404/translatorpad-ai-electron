@@ -1,6 +1,6 @@
-# G-Pad AI: Advanced Screenshot Translation
+# TransPad AI: Advanced Screenshot Translation
 
-G-Pad AI is a powerful desktop application for seamless and intelligent screenshot translation on macOS. Built with Electron, it leverages Google's Cloud Vision and Translation APIs to provide a best-in-class experience for developers, designers, and anyone working with multilingual content.
+TransPad AI is a powerful desktop application for seamless and intelligent screenshot translation on macOS. Built with Electron, it leverages Google's Cloud Vision and Translation APIs to provide a best-in-class experience for developers, designers, and anyone working with multilingual content.
 
 This tool moves beyond simple text translation, allowing you to capture any part of your screen, automatically recognize the text within the image, and overlay the translation directly onto a new image, preserving the original context.
 
@@ -109,7 +109,7 @@ translatorpad-ai-electron/
 │           └── main.js          # Renderer process logic
 ├── assets/
 │   ├── icons/
-│   │   └── gloding-logo.png     # Application icon
+│   │   └── transpad_512x512.png     # Application icon
 │   └── screenshots/
 │       └── main-app.png         # Showcase screenshot
 ├── credentials/                 # Stores Google Cloud key (gitignored)

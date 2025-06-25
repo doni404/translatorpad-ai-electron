@@ -45,7 +45,7 @@
   },
   "build": {
     "appId": "com.gloding.gpad-ai",
-    "productName": "G-Pad AI",
+    "productName": "TransPad AI",
     "copyright": "Copyright © 2025 GLODING, Inc.",
     "directories": {
       "output": "dist"
@@ -64,7 +64,7 @@
       "credentials/google-cloud-key.json"
     ],
     "mac": {
-      "icon": "assets/icons/gloding-logo.png",
+      "icon": "assets/icons/transpad_512x512.png",
       "category": "public.app-category.productivity",
       "target": [
         {
@@ -79,8 +79,8 @@
       "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "dmg": {
-      "title": "G-Pad AI Installer",
-      "icon": "assets/icons/gloding-logo.png"
+      "title": "TransPad AI Installer",
+      "icon": "assets/icons/transpad_512x512.png"
     },
     "nsis": {
       "oneClick": false,

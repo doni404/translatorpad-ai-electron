@@ -12,8 +12,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openInApp: () => ipcRenderer.invoke('open-in-app'),
 
   // Vision and translation APIs
-  extractAndTranslate: (data) => ipcRenderer.invoke('extract-and-translate', data),
-  getLanguages: () => ipcRenderer.invoke('get-languages'),
+  extractAndTranslate: async (options) => ipcRenderer.invoke('extract-and-translate', options),
+  getLanguages: async () => ipcRenderer.invoke('get-languages'),
 
   // File operations
   saveResult: (data) => ipcRenderer.invoke('save-result', data),
@@ -32,6 +32,52 @@ contextBridge.exposeInMainWorld('electronAPI', {
     });
   },
 
+  // Lup result data listener
+  onLupResultData: (callback) => {
+    ipcRenderer.on('lup-result-data', (event, resultData) => {
+      callback(resultData);
+    });
+  },
+
+  // Original image data listener
+  onOriginalImageData: (callback) => {
+    ipcRenderer.on('original-image-data', (event, originalImageDataUrl) => {
+      callback(originalImageDataUrl);
+    });
+  },
+
+  // Gallery update listener
+  onGalleryUpdate: (callback) => {
+    ipcRenderer.on('gallery-update', (event, galleryData) => {
+      callback(galleryData);
+    });
+  },
+
+  // Gallery item removal
+  removeFromGallery: (index) => ipcRenderer.invoke('remove-from-gallery', index),
+
+  // Clipboard operations
+  copyAsImage: (imageDataUrl) => ipcRenderer.invoke('copy-as-image', imageDataUrl),
+  copyAsText: (text) => ipcRenderer.invoke('copy-as-text', text),
+
+  // History copy operations
+  getOriginalImageForCopy: (imagePath) => ipcRenderer.invoke('get-original-image-for-copy', imagePath),
+  getImageAsDataUrl: (imagePath) => ipcRenderer.invoke('get-image-as-data-url', imagePath),
+
+  // Target language change listener
+  onTargetLanguageChanged: (callback) => {
+    ipcRenderer.on('target-language-changed', (event, language) => {
+      callback(language);
+    });
+  },
+
+  // Trigger capture listener
+  onTriggerCapture: (callback) => {
+    ipcRenderer.on('trigger-capture', (event) => {
+      callback();
+    });
+  },
+
   // Toast message listener
   onShowToast: (callback) => {
     ipcRenderer.on('show-toast', (event, data) => {
@@ -42,5 +88,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Remove listeners
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners();
-  }
+  },
+
+  // New function
+  openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
+
+  // New listener
+  onResetToHome: (callback) => {
+    ipcRenderer.on('reset-to-home', () => callback());
+  },
+
+  // --- New listener for About page ---
+  onShowAboutPage: (callback) => {
+    ipcRenderer.on('show-about-page', () => callback());
+  },
+
+  // New listener for Clear History
+  onClearHistory: (callback) => {
+    ipcRenderer.on('clear-history', () => callback());
+  },
+
+  // Gallery Operations
+  copyFromGallery: (args) => ipcRenderer.invoke('copy-from-gallery', args),
+
+  // Dialogs
+  showClearHistoryDialog: () => ipcRenderer.invoke('show-clear-history-dialog'),
+
+  // External Links
+  openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
 }); 

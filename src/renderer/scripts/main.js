@@ -71,9 +71,49 @@ function setupEventListeners() {
         clearHistoryBtn.addEventListener('click', clearHistory);
     }
 
+    // Use event delegation for dynamically visible buttons
+    document.body.addEventListener('click', (e) => {
+        // Handle plan upgrade clicks from the plans page
+        if (e.target.matches('.plan-button.upgrade')) {
+            e.preventDefault();
+            showToast('Upgrade feature is coming soon!', 'info');
+        }
+
+        // Handle About page links
+        if (e.target.matches('.about-link')) {
+            e.preventDefault();
+            const linkType = e.target.getAttribute('data-link');
+            let url;
+            switch (linkType) {
+                case 'bug':
+                    url = 'https://gloding.com/contact';
+                    break;
+                case 'website':
+                    url = 'https://gloding.com';
+                    break;
+                case 'check-update':
+                    showToast('You are using the latest version!', 'success');
+                    return;
+            }
+            if (url && window.electronAPI && window.electronAPI.openExternalLink) {
+                window.electronAPI.openExternalLink(url);
+            }
+        }
+    });
+
     // Listen for capture completion
     window.electronAPI.onCaptureComplete((result) => {
         handleCaptureComplete(result);
+    });
+
+    // Listen for 'About' from menu
+    window.electronAPI.onShowAboutPage(() => {
+        showSection('about');
+    });
+
+    // Listen for menu item to clear history
+    window.electronAPI.onClearHistory(() => {
+        clearHistory();
     });
 
     // Listen for toast messages from main process
@@ -87,6 +127,23 @@ function setupEventListeners() {
     window.electronAPI.onResetToHome(() => {
         closeModal();
     });
+
+    // Listen for trigger-capture event from menu
+    if (window.electronAPI.onTriggerCapture) {
+        window.electronAPI.onTriggerCapture(() => {
+            startCapture();
+        });
+    }
+
+    // Plans page buttons
+    const upgradeButtons = document.querySelectorAll('.plan-button.upgrade');
+    if (upgradeButtons) {
+        upgradeButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                showToast('Upgrade feature is coming soon!', 'info');
+            });
+        });
+    }
 }
 
 // Navigation between sections
@@ -209,7 +266,7 @@ function loadHistory() {
         clearHistoryBtn.style.display = 'inline-flex';
     }
     
-    historyList.innerHTML = translationHistory.map(item => {
+    historyList.innerHTML = translationHistory.map((item, index) => {
         const date = new Date(item.timestamp);
         const formattedDate = date.getFullYear() + '-' + 
             String(date.getMonth() + 1).padStart(2, '0') + '-' + 
@@ -217,16 +274,77 @@ function loadHistory() {
             String(date.getHours()).padStart(2, '0') + ':' + 
             String(date.getMinutes()).padStart(2, '0');
         
+        const detectedLang = getLanguageName(item.detectedLanguage || 'unknown');
+        const targetLang = getLanguageName(item.language || 'unknown');
+        
         return `
-            <div class="history-item">
-                <div class="history-date">${formattedDate}</div>
+            <div class="history-item" data-index="${index}">
+                <div class="history-header">
+                    <div class="history-date-lang">
+                        <div class="history-date">${formattedDate}</div>
+                        <div class="history-languages">${detectedLang} → ${targetLang}</div>
+                    </div>
+                    <div class="history-actions">
+                        <button class="history-copy-btn" data-index="${index}" title="Copy Options">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                        <div class="history-copy-dropdown" id="historyDropdown${index}">
+                            ${item.imagePath ? `
+                                <button class="copy-option" onclick="copyHistoryItem(${index}, 'originalImage')">
+                                    <i class="fas fa-image"></i> Copy Original Image
+                                </button>
+                            ` : ''}
+                            <button class="copy-option" onclick="copyHistoryItem(${index}, 'originalText')">
+                                <i class="fas fa-file-text"></i> Copy Original Text
+                            </button>
+                            ${item.imagePath ? `
+                                <button class="copy-option" onclick="copyHistoryItem(${index}, 'translatedImage')">
+                                    <i class="fas fa-images"></i> Copy Translated Image
+                                </button>
+                            ` : ''}
+                            <button class="copy-option" onclick="copyHistoryItem(${index}, 'translatedText')">
+                                <i class="fas fa-language"></i> Copy Translated Text
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <div class="history-text">
-                    <div class="original">${item.originalText.substring(0, 100)}${item.originalText.length > 100 ? '...' : ''}</div>
-                    <div class="translated">${item.translatedText.substring(0, 100)}${item.translatedText.length > 100 ? '...' : ''}</div>
+                    <div class="original-text">
+                        <strong>Original:</strong> ${item.originalText.substring(0, 150)}${item.originalText.length > 150 ? '...' : ''}
+                    </div>
+                    <div class="translated-text">
+                        <strong>Translated:</strong> ${item.translatedText.substring(0, 150)}${item.translatedText.length > 150 ? '...' : ''}
+                    </div>
                 </div>
             </div>
         `;
     }).join('');
+    
+    // Add event listeners for copy buttons
+    document.querySelectorAll('.history-copy-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const index = btn.getAttribute('data-index');
+            const dropdown = document.getElementById(`historyDropdown${index}`);
+            
+            // Close all other dropdowns
+            document.querySelectorAll('.history-copy-dropdown').forEach(d => {
+                if (d !== dropdown) d.style.display = 'none';
+            });
+            
+            // Toggle current dropdown
+            dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+        });
+    });
+    
+    // Close dropdowns when clicking elsewhere
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.history-actions')) {
+            document.querySelectorAll('.history-copy-dropdown').forEach(d => {
+                d.style.display = 'none';
+            });
+        }
+    });
 }
 
 function showTranslationResult(translation) {
@@ -345,66 +463,46 @@ function showToast(message, type = 'info') {
 
     // Create toast element
     const toast = document.createElement('div');
-    toast.className = `toast-notification toast-${type}`;
+    toast.className = 'toast-notification';
     
-    // Set icon based on type
-    let icon = '';
+    let iconClass = 'fa-info-circle';
+    let iconColor = '#1E95D4';
+
     switch (type) {
         case 'success':
-            icon = '<i class="fas fa-check-circle"></i>';
+            iconClass = 'fa-check-circle';
+            iconColor = '#48bb78';
             break;
         case 'error':
-            icon = '<i class="fas fa-exclamation-circle"></i>';
-            break;
-        case 'info':
-        default:
-            icon = '<i class="fas fa-info-circle"></i>';
+            iconClass = 'fa-exclamation-circle';
+            iconColor = '#e53e3e';
             break;
     }
     
     toast.innerHTML = `
-        ${icon}
-        <span>${message}</span>
+        <div class="toast-icon">
+            <i class="fas ${iconClass}"></i>
+        </div>
+        <div class="toast-content">
+            <p class="toast-message">${message}</p>
+        </div>
+        <div class="toast-progress"></div>
     `;
     
-    // Add styles
-    toast.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: ${type === 'error' ? '#EF4444' : type === 'success' ? '#10B981' : '#6366F1'};
-        color: white;
-        padding: 16px 20px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        font-weight: 500;
-        font-size: 14px;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
-        z-index: 10000;
-        transform: translateX(100%);
-        transition: transform 0.3s ease;
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-    `;
-    
-    // Add to document
     document.body.appendChild(toast);
     
+    toast.querySelector('.toast-icon i').style.color = iconColor;
+
     // Animate in
     setTimeout(() => {
-        toast.style.transform = 'translateX(0)';
+        toast.classList.add('show');
     }, 100);
     
     // Auto remove after 3 seconds
     setTimeout(() => {
-        toast.style.transform = 'translateX(100%)';
-        setTimeout(() => {
-            if (toast.parentNode) {
-                toast.remove();
-            }
-        }, 300);
+        toast.classList.remove('show');
+        // Remove from DOM after animation ends
+        toast.addEventListener('transitionend', () => toast.remove());
     }, 3000);
 }
 
@@ -738,11 +836,89 @@ function updateApiStatus(isConfigured, message) {
     }
 }
 
-function clearHistory() {
-    if (confirm('Are you sure you want to clear all translation history?')) {
+async function clearHistory() {
+    const result = await window.electronAPI.showClearHistoryDialog();
+    if (result.response === 0) { // This means the first button ('Yes') was clicked
         translationHistory = [];
         localStorage.setItem('translationHistory', JSON.stringify(translationHistory));
         loadHistory(); // Reload the history view to show the empty state
         showToast('Translation history cleared successfully!', 'success');
+    }
+}
+
+// Copy function for history items
+async function copyHistoryItem(index, type) {
+    const item = translationHistory[index];
+    if (!item) {
+        showError('History item not found');
+        return;
+    }
+    
+    // Close the dropdown
+    const dropdown = document.getElementById(`historyDropdown${index}`);
+    if (dropdown) {
+        dropdown.style.display = 'none';
+    }
+    
+    try {
+        switch (type) {
+            case 'originalText':
+                await window.electronAPI.copyAsText(item.originalText);
+                showSuccess('Original text copied to clipboard!');
+                break;
+                
+            case 'translatedText':
+                await window.electronAPI.copyAsText(item.translatedText);
+                showSuccess('Translated text copied to clipboard!');
+                break;
+                
+            case 'originalImage':
+                if (item.imagePath) {
+                    // Request original image from main process
+                    const result = await window.electronAPI.getOriginalImageForCopy(item.imagePath);
+                    if (result.success) {
+                        await window.electronAPI.copyAsImage(result.imageDataUrl);
+                        showSuccess('Original image copied to clipboard!');
+                    } else {
+                        showError('Failed to load original image: ' + result.error);
+                    }
+                } else {
+                    showError('Original image not available');
+                }
+                break;
+                
+            case 'translatedImage':
+                if (item.imagePath && item.textBlocks) {
+                    // Create translated image
+                    const result = await window.electronAPI.createTranslatedImage({
+                        originalImagePath: item.imagePath,
+                        originalText: item.originalText,
+                        translatedText: item.translatedText,
+                        textBlocks: item.textBlocks || []
+                    });
+                    
+                    if (result.success) {
+                        // Convert file path to data URL and copy
+                        const imageResult = await window.electronAPI.getImageAsDataUrl(result.imagePath);
+                        if (imageResult.success) {
+                            await window.electronAPI.copyAsImage(imageResult.dataUrl);
+                            showSuccess('Translated image copied to clipboard!');
+                        } else {
+                            showError('Failed to prepare image for copying');
+                        }
+                    } else {
+                        showError('Failed to create translated image: ' + result.error);
+                    }
+                } else {
+                    showError('Translated image cannot be created - missing data');
+                }
+                break;
+                
+            default:
+                showError('Unknown copy type');
+        }
+    } catch (error) {
+        console.error('Copy failed:', error);
+        showError('Copy operation failed: ' + error.message);
     }
 } 

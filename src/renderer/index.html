@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>G-Pad AI</title>
+    <title>TransPad AI</title>
     <link rel="stylesheet" href="styles/main.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -13,9 +13,9 @@
         <!-- Sidebar -->
         <div class="sidebar">
             <div class="sidebar-header">
-                <div class="logo">
-                    <img src="../../assets/icons/gloding-logo.png" alt="G-Pad AI Logo" class="logo-img">
-                    <span>G-Pad AI</span>
+                <div class="logo" data-section="about">
+                    <img src="../../assets/icons/transpad_512x512.png" alt="TransPad AI Logo" class="logo-img">
+                    <span>TransPad AI</span>
                 </div>
             </div>
             
@@ -31,6 +31,12 @@
                         <a href="#" class="nav-link" data-section="history">
                             <i class="fas fa-clock-rotate-left"></i>
                             <span>History</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#" class="nav-link" data-section="plans">
+                            <i class="fas fa-crown"></i>
+                            <span>Plans</span>
                         </a>
                     </li>
                     <li class="nav-item">
@@ -60,10 +66,21 @@
             </nav>
             
             <div class="sidebar-footer">
-                <button class="upgrade-btn" id="sidebarUpgradeBtn">
-                    <i class="fas fa-crown"></i>
-                    <span>Upgrade to Pro</span>
-                </button>
+                <div class="sidebar-plan-info">
+                    <div class="plan-status-icon">
+                        <i class="fas fa-gem"></i>
+                    </div>
+                    <div class="plan-status-text">
+                        <div class="plan-name">Free Plan</div>
+                        <a href="#" class="upgrade-link" data-section="plans">Upgrade to Pro</a>
+                    </div>
+                </div>
+                
+                <div class="sidebar-app-info">
+                    <span>Version 1.0.0</span>
+                    <span class="separator">•</span>
+                    <span>© 2025 GLODING, Inc.</span>
+                </div>
             </div>
         </div>
 
@@ -72,8 +89,8 @@
             <!-- Home Section -->
             <section id="home" class="section active">
                 <div class="section-header">
-                    <h2>Welcome to G-Pad AI</h2>
-                    <p>Gloding Pad AI - Advanced screenshot translation for macOS</p>
+                    <h2>Welcome to TransPad AI</h2>
+                    <p>Your advanced screenshot translation tool for macOS</p>
                 </div>
                 
                 <div class="welcome-content">
@@ -122,6 +139,204 @@
                             <i class="fas fa-history"></i>
                             <h3>No translations yet</h3>
                             <p>Start capturing and translating to see your history here</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Plans Section -->
+            <section id="plans" class="section">
+                <div class="section-header">
+                    <h2>Plans & Pricing</h2>
+                    <p>Choose the perfect plan for your translation needs</p>
+                </div>
+                
+                <div class="plans-content">
+                    <!-- Current Plan Status -->
+                    <div class="current-plan-card">
+                        <div class="current-plan-header">
+                            <i class="fas fa-crown"></i>
+                            <div>
+                                <h3>Your Current Plan</h3>
+                                <p>Free Plan</p>
+                            </div>
+                        </div>
+                        <div class="plan-usage">
+                            <div class="usage-item">
+                                <span>Monthly Translations</span>
+                                <div class="usage-bar">
+                                    <div class="usage-fill" style="width: 60%"></div>
+                                </div>
+                                <span>60 / 100</span>
+                            </div>
+                            <div class="usage-item">
+                                <span>History Storage</span>
+                                <div class="usage-bar">
+                                    <div class="usage-fill" style="width: 40%"></div>
+                                </div>
+                                <span>40 / 100</span>
+                            </div>
+                        </div>
+                        <div class="plan-expires">
+                            <span>Resets in 12 days</span>
+                        </div>
+                    </div>
+
+                    <!-- Pricing Plans -->
+                    <div class="pricing-grid">
+                        <!-- Free Plan -->
+                        <div class="pricing-card free">
+                            <div class="plan-badge">Current</div>
+                            <div class="plan-header">
+                                <h3>Free</h3>
+                                <div class="plan-price">
+                                    <span class="price">$0</span>
+                                    <span class="period">/month</span>
+                                </div>
+                            </div>
+                            <div class="plan-features">
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>100 translations/month</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>100 history items</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Basic OCR accuracy</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>3 languages</span>
+                                </div>
+                                <div class="feature limited">
+                                    <i class="fas fa-times"></i>
+                                    <span>No batch processing</span>
+                                </div>
+                            </div>
+                            <button class="plan-button current" disabled>Current Plan</button>
+                        </div>
+
+                        <!-- Pro Plan -->
+                        <div class="pricing-card pro popular">
+                            <div class="plan-badge popular">Most Popular</div>
+                            <div class="plan-header">
+                                <h3>Pro</h3>
+                                <div class="plan-price">
+                                    <span class="price">$9.99</span>
+                                    <span class="period">/month</span>
+                                </div>
+                            </div>
+                            <div class="plan-features">
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>1,000 translations/month</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Unlimited history</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Enhanced OCR accuracy</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>100+ languages</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Batch processing</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Cloud sync</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Priority support</span>
+                                </div>
+                            </div>
+                            <button class="plan-button upgrade">Upgrade to Pro</button>
+                        </div>
+
+                        <!-- Business Plan -->
+                        <div class="pricing-card business">
+                            <div class="plan-header">
+                                <h3>Business</h3>
+                                <div class="plan-price">
+                                    <span class="price">$29.99</span>
+                                    <span class="period">/month</span>
+                                </div>
+                            </div>
+                            <div class="plan-features">
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Unlimited translations</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Unlimited history</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Premium OCR accuracy</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>100+ languages</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Advanced batch processing</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Team collaboration</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>API access</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>Custom integrations</span>
+                                </div>
+                                <div class="feature">
+                                    <i class="fas fa-check"></i>
+                                    <span>24/7 support</span>
+                                </div>
+                            </div>
+                            <button class="plan-button upgrade">Upgrade to Business</button>
+                        </div>
+                    </div>
+
+                    <!-- Plan Benefits -->
+                    <div class="plan-benefits">
+                        <h3>Why Upgrade?</h3>
+                        <div class="benefits-grid">
+                            <div class="benefit-item">
+                                <i class="fas fa-zap"></i>
+                                <h4>Faster Processing</h4>
+                                <p>Enhanced OCR and translation speed with premium infrastructure</p>
+                            </div>
+                            <div class="benefit-item">
+                                <i class="fas fa-globe"></i>
+                                <h4>More Languages</h4>
+                                <p>Access to 100+ languages including rare and regional dialects</p>
+                            </div>
+                            <div class="benefit-item">
+                                <i class="fas fa-layer-group"></i>
+                                <h4>Batch Processing</h4>
+                                <p>Process multiple screenshots and documents simultaneously</p>
+                            </div>
+                            <div class="benefit-item">
+                                <i class="fas fa-headset"></i>
+                                <h4>Priority Support</h4>
+                                <p>Get help when you need it with dedicated customer support</p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -186,6 +401,38 @@
                         
                         <button type="submit" class="btn btn-primary">Save Settings</button>
                     </form>
+                </div>
+            </section>
+
+            <!-- About Section -->
+            <section id="about" class="section">
+                <div class="section-header">
+                    <h2>About TransPad AI</h2>
+                    <p>Your advanced screenshot translation tool for macOS</p>
+                </div>
+                
+                <div class="about-content">
+                    <img src="../../assets/icons/transpad_512x512.png" alt="TransPad AI Logo" class="about-logo">
+                    <h3>TransPad AI</h3>
+                    <div class="about-version-info">
+                        <span>Version 1.0.0</span>
+                        <span class="separator">•</span>
+                        <span>© 2025 GLODING, Inc.</span>
+                    </div>
+                    <div class="about-divider"></div>
+                    <p class="about-description">
+                        TransPad AI redefines screen translation with its cutting-edge features, offering instant and highly accurate text recognition powered by an advanced AI engine.
+                    </p>
+                    <div class="about-tech-stack">
+                        <span class="tech-item"><i class="fas fa-wand-magic-sparkles"></i> High-Performance OCR</span>
+                        <span class="tech-item"><i class="fas fa-brain"></i> Advanced AI Translation</span>
+                        <span class="tech-item"><i class="fas fa-atom"></i> Powered by Electron</span>
+                    </div>
+                    <div class="about-links">
+                        <a href="#" class="about-link" data-link="check-update">Check for Updates</a>
+                        <a href="#" class="about-link" data-link="bug">Report a Bug</a>
+                        <a href="#" class="about-link" data-link="website">Official Website</a>
+                    </div>
                 </div>
             </section>
         </div>
