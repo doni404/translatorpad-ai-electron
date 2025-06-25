@@ -382,100 +382,63 @@ class ScreenshotService {
   // CORE TEXT REPLACEMENT METHOD - Paragraph-by-paragraph translation with precise overlays
   async createImageWithTranslation(originalImagePath, originalText, textBlocks, targetLanguage = null) {
     try {
-      console.log('🔄 Starting paragraph-by-paragraph text replacement...');
-      console.log('📋 textBlocks parameter type:', typeof textBlocks, 'length:', Array.isArray(textBlocks) ? textBlocks.length : 'N/A');
+      console.log('🖼️ Creating new image with translated text...');
+      console.log(`Using target language: ${targetLanguage || 'Default'}`);
       
-      const timestamp = Date.now();
-      const outputPath = path.join(this.tempDir, `translated_${timestamp}.png`);
-      
-      const image = sharp(originalImagePath);
-      const metadata = await image.metadata();
-      
-      // Validate textBlocks input
-      if (!textBlocks || !Array.isArray(textBlocks) || textBlocks.length === 0) {
-        console.log('⚠️ No valid text blocks found, returning original image with simple text overlay');
-        fs.copyFileSync(originalImagePath, outputPath);
-        return { 
-          translatedImagePath: outputPath, 
-          fullTranslatedText: originalText, 
-          detectedLanguage: 'unknown', 
-          targetLanguage: targetLanguage || 'unknown' 
-        };
-      }
-      
-      // Use provided target language or auto-detect
-      let finalTargetLanguage = targetLanguage;
-      let detectedLanguage = 'unknown';
-      
-      if (!finalTargetLanguage) {
-        // Auto-detect language from the full text to determine target language (legacy behavior)
+      const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks);
+      console.log(`Found ${paragraphs.length} paragraphs to process`);
+
+      const overlays = [];
+      let fullTranslatedText = '';
+
+      // Get dimensions of the original image
+      const metadata = await sharp(originalImagePath).metadata();
+      const imageWidth = metadata.width;
+      const imageHeight = metadata.height;
+
+      // Translate paragraph by paragraph
+      for (const paragraph of paragraphs) {
         try {
-          const detectionResult = await this.translationService.detectLanguage(originalText);
-          console.log('Detected language for translation:', detectionResult);
-          if (detectionResult && detectionResult.language === 'ja') {
-            finalTargetLanguage = 'en';
-          } else {
-            finalTargetLanguage = 'ja';
+          const translation = await this.translationService.translateText(paragraph.text, targetLanguage);
+          
+          if (translation && translation.translatedText) {
+            fullTranslatedText += translation.translatedText + '\n';
+            
+            // Generate overlay for this translated paragraph
+            const overlay = await this.createParagraphOverlay(
+              paragraph, 
+              translation.translatedText, 
+              imageWidth, // Pass image width
+              imageHeight // Pass image height
+            );
+            
+            if (overlay) {
+              overlays.push(overlay);
+            }
           }
-          detectedLanguage = detectionResult.language || 'unknown';
         } catch (error) {
-          console.warn('Language detection failed, defaulting to Japanese target language.', error.message);
-          finalTargetLanguage = 'ja';
-        }
-      } else {
-        console.log(`Using provided target language: ${finalTargetLanguage}`);
-        // Still detect source language for logging purposes
-        try {
-          const detectionResult = await this.translationService.detectLanguage(originalText);
-          detectedLanguage = detectionResult.language || 'unknown';
-          console.log(`Detected source language: ${detectedLanguage}, translating to: ${finalTargetLanguage}`);
-        } catch (error) {
-          console.warn('Source language detection failed, but proceeding with translation.', error.message);
+          console.error(`❌ Error in paragraph-by-paragraph text replacement:`, error);
         }
       }
 
-      // Extract paragraphs from the DOCUMENT_TEXT_DETECTION structure
-      const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks);
+      // Create the final image
+      const timestamp = Date.now();
+      const translatedImagePath = path.join(this.tempDir, `translated_${timestamp}.png`);
       
-      const overlays = [];
-      const translatedParagraphs = [];
-      
-      // Process each paragraph individually
-      for (const paragraph of paragraphs) {
-        try {
-          // Translate this paragraph individually
-          const translatedParagraphText = await this.translationService.translateText(
-            paragraph.text, 
-            finalTargetLanguage
-          );
-          translatedParagraphs.push(translatedParagraphText);
-          
-          // Create overlay for this paragraph
-          await this.createParagraphOverlay(paragraph, translatedParagraphText, overlays, originalImagePath);
-          
-        } catch (translationError) {
-          console.error(`  ❌ Translation failed for paragraph:`, translationError.message);
-          // Use original text as fallback
-          translatedParagraphs.push(paragraph.text);
-          await this.createParagraphOverlay(paragraph, paragraph.text, overlays, originalImagePath);
-        }
-      }
-      
-      if (overlays.length > 0) {
-        await image.composite(overlays).png().toFile(outputPath);
-      } else {
-        fs.copyFileSync(originalImagePath, outputPath);
-      }
+      await sharp(originalImagePath)
+        .composite(overlays)
+        .toFile(translatedImagePath);
+
+      console.log('✅ Translated image created:', translatedImagePath);
       
       return {
-        translatedImagePath: outputPath,
-        fullTranslatedText: translatedParagraphs.join(' '),
-        detectedLanguage,
-        targetLanguage: finalTargetLanguage,
+        translatedImagePath,
+        fullTranslatedText: fullTranslatedText.trim(),
+        detectedLanguage: 'mixed' // Since we translate per paragraph
       };
-      
+
     } catch (error) {
-      console.error('❌ Error in paragraph-by-paragraph text replacement:', error);
+      console.error('Error creating translated image:', error);
       throw error;
     }
   }
@@ -601,179 +564,62 @@ class ScreenshotService {
     return paragraphs;
   }
 
-  // Create overlay for a single paragraph
-  async createParagraphOverlay(paragraph, translatedText, overlays, originalImagePath) {
-    const boundingBox = paragraph.boundingBox;
-    
-    console.log(`📝 Creating paragraph overlay: "${translatedText.substring(0, 50)}..." at (${boundingBox.left}, ${boundingBox.top})`);
-    
-    // Skip if no text to display
-    if (!translatedText || translatedText.trim() === '') {
-      console.log('⚠️ Skipped: empty translation');
-      return;
-    }
-    
-    // Skip if bounding box is too small
-    if (boundingBox.width < 10 || boundingBox.height < 8) {
-      console.log('⚠️ Skipped: bounding box too small');
-      return;
-    }
-    
-    // Sample background color from the area
-    const backgroundColor = await this.sampleBackgroundColor(originalImagePath, boundingBox);
-    
-    // Calculate font size for paragraphs with natural paragraph flow consideration
-    const fontSize = this.calculateParagraphFontSize(boundingBox, paragraph.text, translatedText, paragraph.words.length);
-    
-    // Use contrasting text color
-    const textColor = this.getContrastingTextColor(backgroundColor);
-    
-    console.log(`🎨 Paragraph styling: fontSize=${fontSize}px, bg=${backgroundColor}, text=${textColor}`);
-    
-    // Create SVG overlay with natural paragraph flow
-    const svgOverlay = this.createParagraphTextOverlay(
-      translatedText,
-      boundingBox,
-      fontSize,
-      textColor,
-      backgroundColor
-    );
-    
-    overlays.push({
-      input: Buffer.from(svgOverlay),
-      left: boundingBox.left,
-      top: boundingBox.top,
-      blend: 'over'
-    });
-  }
-
-  // Calculate font size for paragraphs with natural paragraph flow consideration
-  calculateParagraphFontSize(boundingBox, originalText, translatedText, wordCount) {
-    // Analyze word positions to determine actual line count and spacing
-    const wordPositions = this.getWordPositions(boundingBox);
-    const actualLineCount = wordPositions.lineCount;
-    const lineSpacing = wordPositions.averageLineSpacing;
-    
-    console.log(`📐 Paragraph flow font calculation:`);
-    console.log(`  Bounding box: ${boundingBox.width}x${boundingBox.height}px`);
-    console.log(`  Actual line count: ${actualLineCount}`);
-    console.log(`  Average line spacing: ${lineSpacing.toFixed(1)}px`);
-    
-    // Calculate baseline font size based on actual line metrics
-    // Use a larger portion of line spacing for font size (85% instead of 70%)
-    const baselineFromHeight = lineSpacing * 0.85;
-    console.log(`  Baseline from line spacing: ${baselineFromHeight.toFixed(1)}px`);
-    
-    // For paragraph flow, we need to ensure text fits within width constraints
-    const availableWidth = boundingBox.width * 0.95; // Use more width
-    const availableHeight = boundingBox.height * 0.95; // Use more height
-    
-    // More accurate character width estimation for mixed text (English + Japanese)
-    let avgCharWidthRatio = 0.55; // Character width as fraction of font size
-    
-    // Adjust for text type - if we have lots of CJK characters, they're wider
-    const cjkCharCount = (translatedText.match(/[\u3000-\u9fff]/g) || []).length;
-    const totalChars = translatedText.length;
-    const cjkRatio = cjkCharCount / totalChars;
-    
-    if (cjkRatio > 0.5) {
-      avgCharWidthRatio = 0.65; // Wider for predominantly CJK text
-    } else if (cjkRatio > 0.2) {
-      avgCharWidthRatio = 0.6; // Mixed text
-    }
-    
-    console.log(`  CJK characters: ${cjkCharCount}/${totalChars} (${(cjkRatio * 100).toFixed(1)}%)`);
-    console.log(`  Char width ratio: ${avgCharWidthRatio}`);
-    
-    // Calculate how many characters can fit per line with the baseline font size
-    const baselineCharWidth = baselineFromHeight * avgCharWidthRatio;
-    const charsPerLine = Math.floor(availableWidth / baselineCharWidth);
-    const desiredLines = Math.max(actualLineCount, Math.ceil(translatedText.length / charsPerLine));
-    
-    console.log(`  Baseline char width: ${baselineCharWidth.toFixed(1)}px`);
-    console.log(`  Desired chars per line: ${charsPerLine}`);
-    console.log(`  Desired lines: ${desiredLines}`);
-    
-    // Calculate font size based on height constraint
-    const maxFontSizeByHeight = (availableHeight / desiredLines) * 0.85; // Allow for line spacing
-    
-    // Calculate font size based on width constraint
-    const maxFontSizeByWidth = (availableWidth / (charsPerLine * avgCharWidthRatio)) * 0.95;
-    
-    // Use the smaller of the constraints
-    let estimatedFontSize = Math.min(baselineFromHeight, maxFontSizeByHeight, maxFontSizeByWidth);
-    
-    console.log(`  Max font by height: ${maxFontSizeByHeight.toFixed(1)}px`);
-    console.log(`  Max font by width: ${maxFontSizeByWidth.toFixed(1)}px`);
-    console.log(`  Initial estimate: ${estimatedFontSize.toFixed(1)}px`);
-    
-    // Adjust based on text length difference for better readability
-    const originalLength = originalText.length;
-    const translatedLength = translatedText.length;
-    
-    if (translatedLength > originalLength * 1.3) {
-      // If translated text is significantly longer, reduce font size moderately
-      const lengthRatio = Math.sqrt(originalLength / translatedLength);
-      estimatedFontSize *= Math.max(0.9, lengthRatio);
-      console.log(`  Adjusted for longer text: ${estimatedFontSize.toFixed(1)}px`);
-    } else if (translatedLength < originalLength * 0.7) {
-      // If translated text is much shorter, can increase size slightly
-      estimatedFontSize *= Math.min(1.2, Math.sqrt(originalLength / translatedLength));
-      console.log(`  Adjusted for shorter text: ${estimatedFontSize.toFixed(1)}px`);
-    }
-    
-    // Consider word density for better spacing
-    if (wordCount > 25) {
-      estimatedFontSize *= 0.95; // Slight reduction for very dense text
-      console.log(`  Adjusted for high word density: ${estimatedFontSize.toFixed(1)}px`);
-    }
-    
-    // Apply reasonable bounds for readability
-    const minFontSize = 18;  // Increased minimum for better readability
-    const maxFontSize = Math.min(42, lineSpacing * 0.9); // Cap at 90% of line spacing
-    
-    const finalFontSize = Math.max(minFontSize, Math.min(maxFontSize, estimatedFontSize));
-    
-    console.log(`📏 Final paragraph font size calculation:`);
-    console.log(`  Text lengths: ${originalLength} → ${translatedLength}`);
-    console.log(`  Font size bounds: ${minFontSize}-${maxFontSize}px`);
-    console.log(`  Final font size: ${finalFontSize.toFixed(1)}px`);
-    
-    return Math.round(finalFontSize);
-  }
-
-  // Helper function to analyze word positions and determine line metrics
-  getWordPositions(boundingBox) {
-    if (!boundingBox.words || boundingBox.words.length === 0) {
-      return { lineCount: 1, averageLineSpacing: boundingBox.height };
+  // Create a single overlay for a paragraph of text
+  async createParagraphOverlay(paragraph, translatedText, imageWidth, imageHeight) {
+    if (!paragraph || !paragraph.boundingBox || !translatedText) {
+      return null;
     }
 
-    // Get all unique y-coordinates (with some tolerance for slight variations)
-    const yPositions = new Set();
-    boundingBox.words.forEach(word => {
-      const y = Math.round(word.vertices[0].y / 5) * 5; // Round to nearest 5px
-      yPositions.add(y);
-    });
+    try {
+      // 1. Calculate the available bounding box for the paragraph
+      const { minX, minY, maxX, maxY } = paragraph.boundingBox;
+      const width = maxX - minX;
+      const height = maxY - minY;
 
-    const uniqueYs = Array.from(yPositions).sort((a, b) => a - b);
-    const lineCount = uniqueYs.length;
-
-    // Calculate average line spacing
-    let totalSpacing = 0;
-    let spacingCount = 0;
-    for (let i = 1; i < uniqueYs.length; i++) {
-      const spacing = uniqueYs[i] - uniqueYs[i-1];
-      if (spacing > 0) {
-        totalSpacing += spacing;
-        spacingCount++;
+      if (width <= 0 || height <= 0) {
+        return null; // Ignore empty boxes
       }
+
+      // 2. Sample the background color from the original image at this position
+      const backgroundColor = await this.sampleBackgroundColor(paragraph.imagePath, paragraph.boundingBox);
+      
+      // 3. Determine a contrasting text color
+      const textColor = this.getContrastingTextColor(backgroundColor);
+
+      // 4. Create the text overlay itself
+      const textOverlay = await this.createParagraphTextOverlay(
+        translatedText, 
+        { width, height }, 
+        textColor, 
+        'transparent' // Use transparent background for the text SVG
+      );
+
+      // --- CRITICAL FIX ---
+      // Create a solid color background overlay that perfectly matches the paragraph's bounding box
+      const backgroundOverlay = await sharp({
+        create: {
+          width: width,
+          height: height,
+          channels: 4,
+          background: backgroundColor
+        }
+      }).png().toBuffer();
+
+      // 5. Composite the text onto the colored background
+      const combinedOverlayBuffer = await sharp(backgroundOverlay)
+        .composite([{ input: textOverlay }])
+        .toBuffer();
+
+      return {
+        input: combinedOverlayBuffer,
+        left: minX,
+        top: minY
+      };
+
+    } catch (error) {
+      console.error('Error creating paragraph overlay:', error);
+      return null;
     }
-
-    const averageLineSpacing = spacingCount > 0 
-      ? totalSpacing / spacingCount 
-      : boundingBox.height / lineCount;
-
-    return { lineCount, averageLineSpacing };
   }
 
   // Create SVG overlay for a paragraph with natural paragraph flow

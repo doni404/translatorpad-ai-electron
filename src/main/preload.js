@@ -101,5 +101,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // --- New listener for About page ---
   onShowAboutPage: (callback) => {
     ipcRenderer.on('show-about-page', () => callback());
-  }
+  },
+
+  // New listener for Clear History
+  onClearHistory: (callback) => {
+    ipcRenderer.on('clear-history', () => callback());
+  },
+
+  // Gallery Operations
+  copyFromGallery: (args) => ipcRenderer.invoke('copy-from-gallery', args),
+
+  // Dialogs
+  showClearHistoryDialog: () => ipcRenderer.invoke('show-clear-history-dialog'),
+
+  // External Links
+  openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
 }); 

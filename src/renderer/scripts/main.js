@@ -111,6 +111,11 @@ function setupEventListeners() {
         showSection('about');
     });
 
+    // Listen for menu item to clear history
+    window.electronAPI.onClearHistory(() => {
+        clearHistory();
+    });
+
     // Listen for toast messages from main process
     if (window.electronAPI.onShowToast) {
         window.electronAPI.onShowToast((data) => {
@@ -831,8 +836,9 @@ function updateApiStatus(isConfigured, message) {
     }
 }
 
-function clearHistory() {
-    if (confirm('Are you sure you want to clear all translation history?')) {
+async function clearHistory() {
+    const result = await window.electronAPI.showClearHistoryDialog();
+    if (result.response === 0) { // This means the first button ('Yes') was clicked
         translationHistory = [];
         localStorage.setItem('translationHistory', JSON.stringify(translationHistory));
         loadHistory(); // Reload the history view to show the empty state

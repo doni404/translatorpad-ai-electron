@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, desktopCapturer, dialog, systemPreferences, Menu, clipboard, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, desktopCapturer, dialog, systemPreferences, Menu, clipboard, nativeImage, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { VisionService } = require('./services/visionService');
@@ -25,9 +25,6 @@ class App {
   }
 
   init() {
-    // Set app name for proper branding
-    app.setName('TransPad AI');
-    
     app.whenReady().then(() => {
       this.createMainWindow();
       this.registerShortcuts();
@@ -81,10 +78,11 @@ class App {
       this.mainWindow = null;
     });
 
-    // Don't create mini gallery automatically - only create it when first capture is made
-    // setTimeout(() => {
-    //   this.createMiniGallery();
-    // }, 1000); // Small delay to ensure main window is fully loaded
+    // Set the application's dock icon
+    const iconPath = path.join(__dirname, '../../assets/icons/transpad_512x512.png');
+    if (process.platform === 'darwin') {
+      app.dock.setIcon(iconPath);
+    }
   }
 
   createMenu() {
@@ -126,14 +124,53 @@ class App {
         ]
       },
       {
+        label: 'File',
+        submenu: [
+          {
+            label: 'Open Image...',
+            accelerator: 'CommandOrControl+O',
+            click: async () => {
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                await this.openImageFile();
+              }
+            }
+          }
+        ]
+      },
+      {
         label: 'Translation',
         submenu: [
           {
-            label: 'Capture & Translate',
+            label: 'Capture && Translate',
             accelerator: 'CommandOrControl+Shift+S',
             click: () => {
               if (this.mainWindow && !this.mainWindow.isDestroyed()) {
                 this.mainWindow.webContents.send('trigger-capture');
+              }
+            }
+          },
+          {
+            label: 'Translate && Replace Clipboard',
+            accelerator: 'CommandOrControl+Shift+R',
+            click: async () => {
+              await this.translateAndReplaceClipboard();
+            }
+          },
+          {
+            label: 'Copy Last Translation',
+            accelerator: 'CommandOrControl+Shift+V',
+            click: () => {
+              if (this.lastLupResult && this.lastLupResult.translatedText) {
+                clipboard.writeText(this.lastLupResult.translatedText);
+                
+                // Show a confirmation notification
+                if (Notification.isSupported()) {
+                  new Notification({
+                    title: 'Translation Copied',
+                    body: 'The last translated text has been copied to your clipboard.',
+                    silent: true
+                  }).show();
+                }
               }
             }
           },
@@ -152,7 +189,7 @@ class App {
               },
               {
                 label: '🇺🇸 Any → English',
-                accelerator: 'CommandOrControl+2', 
+                accelerator: 'CommandOrControl+2',
                 type: 'radio',
                 checked: this.targetLanguage === 'en',
                 click: () => {
@@ -162,13 +199,27 @@ class App {
               {
                 label: '🇮🇩 Any → Indonesian',
                 accelerator: 'CommandOrControl+3',
-                type: 'radio', 
+                type: 'radio',
                 checked: this.targetLanguage === 'id',
                 click: () => {
                   this.setTargetLanguage('id');
                 }
               }
             ]
+          }
+        ]
+      },
+      {
+        label: 'History',
+        submenu: [
+          {
+            label: 'Clear History',
+            accelerator: 'CommandOrControl+Shift+Backspace',
+            click: () => {
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.webContents.send('clear-history');
+              }
+            }
           }
         ]
       },
@@ -203,6 +254,22 @@ class App {
             label: 'Close',
             accelerator: 'CommandOrControl+W',
             role: 'close'
+          }
+        ]
+      },
+      {
+        label: 'Help',
+        submenu: [
+          {
+            label: 'Check for Updates...',
+            click: () => {
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.webContents.send('show-toast', {
+                  message: 'You are using the latest version of TransPad AI.',
+                  type: 'success'
+                });
+              }
+            }
           }
         ]
       }
@@ -426,7 +493,7 @@ class App {
             // Language display mapping
             const languageLabels = {
                 'ja': 'Any → Japanese',
-                'en': 'Any → English', 
+                'en': 'Any → English',
                 'id': 'Any → Indonesian'
             };
 
@@ -1287,6 +1354,12 @@ class App {
         console.log('Global shortcut error, flag reset');
       }
     });
+
+    // Register global shortcut for clipboard translation
+    globalShortcut.register('CommandOrControl+Shift+R', async () => {
+      console.log('Global "Translate & Replace Clipboard" shortcut activated.');
+      await this.translateAndReplaceClipboard();
+    });
   }
 
   setupIpcHandlers() {
@@ -1653,6 +1726,22 @@ class App {
         return { success: false, error: error.message };
       }
     });
+
+    ipcMain.handle('show-clear-history-dialog', async () => {
+      const iconPath = path.join(__dirname, '../../assets/icons/transpad_512x512.png');
+      const image = nativeImage.createFromPath(iconPath);
+
+      const result = await dialog.showMessageBox(this.mainWindow, {
+        type: 'question',
+        buttons: ['Yes', 'No'],
+        defaultId: 1, // 'No' is the default option
+        title: 'Confirm Clear History',
+        message: 'Are you sure you want to clear all translation history?',
+        detail: 'This action cannot be undone.',
+        icon: image // Force the icon here
+      });
+      return result;
+    });
   }
 
   async startScreenCaptureWithoutPreCapture() {
@@ -1957,6 +2046,144 @@ class App {
       return false;
     }
   }
+
+  async openImageFile() {
+    try {
+      const { filePaths } = await dialog.showOpenDialog(this.mainWindow, {
+        title: 'Open Image for Translation',
+        properties: ['openFile'],
+        filters: [
+          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }
+        ]
+      });
+
+      if (!filePaths || filePaths.length === 0) {
+        console.log('No file selected.');
+        return;
+      }
+
+      const originalImagePath = filePaths[0];
+      console.log(`Image opened: ${originalImagePath}`);
+
+      // 1. Ensure the temp directory exists
+      const tempDir = path.join(app.getPath('userData'), 'temp');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      // 2. Copy the file to a temp location so we can treat it like a capture
+      const imagePath = path.join(tempDir, `opened-${Date.now()}${path.extname(originalImagePath)}`);
+      fs.copyFileSync(originalImagePath, imagePath);
+
+      // 3. Extract text
+      const extractionResult = await this.visionService.extractText(imagePath);
+      if (!extractionResult.fullText || extractionResult.fullText.trim() === '') {
+        this.mainWindow.webContents.send('show-toast', {
+            message: 'No text found in the image.',
+            type: 'warning'
+        });
+        return;
+      }
+
+      // 4. Translate and create the new image
+      const translationResult = await this.screenshotService.createImageWithTranslation(
+        imagePath,
+        extractionResult.fullText,
+        extractionResult.textBlocks,
+        this.targetLanguage
+      );
+
+      // 5. Send result to renderer (same as capture)
+      const result = {
+        success: true,
+        originalText: extractionResult.fullText,
+        translatedText: translationResult.fullTranslatedText,
+        imagePath: imagePath, // Path to the temp copy
+        translatedImagePath: translationResult.translatedImagePath, // Path to the translated version
+        detectedLanguage: translationResult.detectedLanguage,
+        targetLanguage: this.targetLanguage,
+        textBlocks: extractionResult.textBlocks
+      };
+
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('capture-complete', result);
+        // Also add it to the mini gallery
+        // this.addCaptureToGallery(result, translationResult); // <-- REMOVED as per request
+      }
+      
+      console.log('Image file processing complete.');
+
+    } catch (error) {
+      console.error('Error opening and processing image file:', error);
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('capture-complete', {
+          success: false,
+          error: `Failed to process image: ${error.message}`
+        });
+      }
+    }
+  }
+
+  async translateAndReplaceClipboard() {
+    try {
+      const text = clipboard.readText();
+      if (!text || text.trim() === '') {
+        console.log('No text on clipboard to translate.');
+        if (Notification.isSupported()) {
+          new Notification({
+            title: 'Clipboard Empty',
+            body: 'There is no text on the clipboard to translate.',
+            silent: true
+          }).show();
+        }
+        return;
+      }
+
+      console.log(`Translating and replacing clipboard: "${text.substring(0, 30)}..."`);
+
+      const translatedText = await this.translationService.translateText(text, this.targetLanguage);
+      if (!translatedText) {
+        throw new Error('Translation service failed to return a result.');
+      }
+
+      // Replace clipboard content
+      clipboard.writeText(translatedText);
+
+      // Store this as the last result so it can be copied
+      this.lastLupResult = {
+        id: `text-replace-${Date.now()}`,
+        success: true,
+        originalText: text,
+        translatedText: translatedText,
+        imagePath: null,
+        detectedLanguage: 'unknown',
+        targetLanguage: this.targetLanguage,
+        textBlocks: []
+      };
+
+      // Show a confirmation notification
+      if (Notification.isSupported()) {
+        const languageName = new Intl.DisplayNames(['en'], { type: 'language' }).of(this.targetLanguage) || this.targetLanguage;
+        new Notification({
+          title: `Translated to ${languageName} & Copied`,
+          body: translatedText,
+          silent: true
+        }).show();
+      }
+
+      console.log(`Clipboard replacement successful.`);
+
+    } catch (error) {
+      console.error('Error translating and replacing clipboard:', error);
+      if (Notification.isSupported()) {
+        new Notification({
+          title: 'Translation Failed',
+          body: 'Could not translate the text from the clipboard.',
+          silent: true
+        }).show();
+      }
+    }
+  }
 }
 
-new App(); 
+new App();
