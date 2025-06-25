@@ -9,6 +9,7 @@ class App {
   constructor() {
     this.mainWindow = null;
     this.captureWindow = null;
+    this.miniGalleryWindow = null; // New persistent gallery window
     this.visionService = new VisionService();
     this.translationService = new TranslationService();
     this.screenshotService = new ScreenshotService();
@@ -17,13 +18,15 @@ class App {
     this.lastShortcutTime = 0; // Add cooldown tracking
     this.lastLupResult = null; // Store the last lup result for the "Open in App" feature
     this.targetLanguage = 'en'; // Default target language: English
+    this.captureGallery = []; // Store recent captures (max 5)
+    this.maxGalleryItems = 5; // Limit gallery to 5 items
     
     this.init();
   }
 
   init() {
     // Set app name for proper branding
-    app.setName('G-Pad AI');
+    app.setName('TransPad AI');
     
     app.whenReady().then(() => {
       this.createMainWindow();
@@ -51,7 +54,7 @@ class App {
       height: 800,
       minWidth: 800,
       minHeight: 600,
-      title: 'G-Pad AI',
+      title: 'TransPad AI',
       titleBarStyle: 'default',
       movable: true,
       webPreferences: {
@@ -60,7 +63,7 @@ class App {
         enableRemoteModule: false,
         preload: path.join(__dirname, 'preload.js')
       },
-      icon: path.join(__dirname, '../../assets/icons/gloding-logo.png')
+      icon: path.join(__dirname, '../../assets/icons/transpad_512x512.png')
     });
 
     this.mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -77,20 +80,25 @@ class App {
     this.mainWindow.on('closed', () => {
       this.mainWindow = null;
     });
+
+    // Don't create mini gallery automatically - only create it when first capture is made
+    // setTimeout(() => {
+    //   this.createMiniGallery();
+    // }, 1000); // Small delay to ensure main window is fully loaded
   }
 
   createMenu() {
     const template = [
       {
-        label: 'G-Pad AI',
+        label: 'TransPad AI',
         submenu: [
           {
-            label: 'About G-Pad AI',
+            label: 'About TransPad AI',
             role: 'about'
           },
           { type: 'separator' },
           {
-            label: 'Hide G-Pad AI',
+            label: 'Hide TransPad AI',
             accelerator: 'Command+H',
             role: 'hide'
           },
@@ -254,6 +262,10 @@ class App {
                 background-color: transparent;
                 margin: 0;
                 font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                overflow: hidden;
+            }
+            html {
+                overflow: hidden;
             }
             #container {
                 position: absolute;
@@ -279,6 +291,7 @@ class App {
             #resultImage {
                 width: 100%;
                 height: 100%;
+                object-fit: cover;
             }
             #language-indicator {
                 position: absolute;
@@ -599,6 +612,526 @@ class App {
     });
   }
 
+  createMiniGallery() {
+    if (this.miniGalleryWindow) {
+      console.log('Mini gallery already exists');
+      return;
+    }
+
+    // Get screen dimensions for positioning
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
+
+    // Gallery dimensions
+    const galleryWidth = 400; // Much wider to accommodate dropdown without cropping
+    const galleryHeight = Math.min(500, screenHeight - 80); // Larger gallery
+
+    this.miniGalleryWindow = new BrowserWindow({
+      width: galleryWidth,
+      height: galleryHeight,
+      x: 15, // Add margin from left edge
+      y: screenHeight - galleryHeight, // Exactly at bottom
+      transparent: true,
+      frame: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      movable: false,
+      hasShadow: false, // Remove shadow
+      focusable: false, // Don't steal focus
+      show: false, // Start hidden
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.js'),
+        webSecurity: false // Allow content to extend outside bounds
+      }
+    });
+
+    const galleryHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {
+                background-color: transparent;
+                margin: 0;
+                padding: 0;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                overflow: hidden; /* Remove scroll capability */
+            }
+            
+            .gallery-container {
+                display: flex;
+                flex-direction: column-reverse;
+                justify-content: flex-start;
+                gap: 10px;
+                height: 100vh;
+                width: 100vw;
+                background: transparent;
+                padding: 12px;
+                padding-top: 0;
+                box-sizing: border-box;
+                overflow: hidden; /* Remove scroll capability */
+            }
+            
+            .gallery-item {
+                position: relative;
+                width: 110px;
+                height: 85px;
+                border-radius: 8px;
+                overflow: visible; /* Allow dropdown to extend outside item */
+                cursor: pointer;
+                transition: transform 0.2s ease; /* Shorter, simpler transition */
+                background: rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(8px);
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                opacity: 0;
+                transform: translateY(20px);
+                animation: slideInUp 0.4s ease-out forwards;
+            }
+            
+            .gallery-item:hover {
+                transform: scale(1.05);
+                border-color: rgba(255, 255, 255, 0.4);
+            }
+            
+            .gallery-item.entering {
+                animation: slideInUp 0.4s ease-out forwards;
+            }
+            
+            .gallery-item.exiting {
+                animation: slideOutDown 0.4s ease-out forwards;
+            }
+            
+            @keyframes slideInUp {
+                from {
+                    transform: translateY(20px);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateY(0);
+                    opacity: 1;
+                }
+            }
+            
+            @keyframes slideOutDown {
+                from {
+                    transform: translateY(0) scale(1);
+                    opacity: 1;
+                }
+                to {
+                    transform: translateY(20px) scale(0.8);
+                    opacity: 0;
+                }
+            }
+            
+            .gallery-image {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                border-radius: 7px;
+            }
+            
+            .gallery-overlay {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.6);
+                display: none;
+                align-items: center;
+                justify-content: center;
+                border-radius: 7px;
+                overflow: visible; /* Allow dropdown to extend outside */
+            }
+            
+            .gallery-item:hover .gallery-overlay {
+                display: flex;
+            }
+            
+            .copy-btn {
+                background: rgba(128, 128, 128, 0.9);
+                border: none;
+                border-radius: 16px;
+                padding: 6px 12px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: 600;
+                color: white;
+                transition: all 0.2s ease;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                position: relative;
+            }
+            
+            .copy-btn:hover {
+                background: rgba(100, 100, 100, 1);
+                transform: scale(1.05);
+            }
+            
+            .copy-dropdown {
+                position: absolute; /* Use absolute positioning within the gallery window */
+                left: 125px; /* Position to the right of the gallery item */
+                top: 50%;
+                transform: translateY(-50%);
+                background: rgba(0, 0, 0, 0.9);
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 8px;
+                min-width: 180px;
+                display: none;
+                flex-direction: column;
+                overflow: hidden;
+                z-index: 1000;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+                pointer-events: auto;
+            }
+            
+            .copy-dropdown.show {
+                display: flex !important;
+            }
+            
+            .copy-option {
+                padding: 10px 14px;
+                color: white;
+                font-size: 12px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.2s ease;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                border: none;
+                background: transparent;
+                text-align: left;
+                font-family: inherit;
+                white-space: nowrap;
+            }
+            
+            .copy-option:hover {
+                background: rgba(255, 255, 255, 0.15);
+            }
+            
+            .copy-option:not(:last-child) {
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            }
+            
+            .gallery-item.empty {
+                display: none;
+            }
+            
+            .close-btn {
+                position: absolute;
+                top: 4px;
+                right: 4px;
+                background: rgba(255, 59, 48, 0.9);
+                border: none;
+                border-radius: 50%;
+                width: 20px;
+                height: 20px;
+                cursor: pointer;
+                font-size: 12px;
+                color: white;
+                display: none;
+                align-items: center;
+                justify-content: center;
+                font-weight: bold;
+                transition: all 0.2s ease;
+                z-index: 10;
+            }
+            
+            .gallery-item:hover .close-btn {
+                display: flex;
+            }
+            
+            .close-btn:hover {
+                background: rgba(255, 59, 48, 1);
+                transform: scale(1.1);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="gallery-container" id="galleryContainer">
+            <!-- Gallery items will be inserted here -->
+        </div>
+
+        <script>
+            let captureData = [];
+            let activeDropdown = null;
+            let removingIndex = -1;
+
+            // Listen for new captures
+            window.electronAPI.onGalleryUpdate && window.electronAPI.onGalleryUpdate((newCaptureData) => {
+                captureData = newCaptureData;
+                updateGallery();
+            });
+
+            function updateGallery() {
+                const container = document.getElementById('galleryContainer');
+                
+                // If we're not in the middle of a removal animation, clear and rebuild
+                if (removingIndex === -1) {
+                    container.innerHTML = '';
+                    
+                    // Add items in normal order - flex-direction: column-reverse will handle positioning
+                    // Newest items will appear at bottom due to column-reverse
+                    captureData.forEach((capture, index) => {
+                        const item = createGalleryItem(capture, index);
+                        // Add entering animation for new items
+                        item.classList.add('entering');
+                        container.appendChild(item);
+                    });
+                }
+            }
+
+            function createGalleryItem(capture, index) {
+                const item = document.createElement('div');
+                item.className = 'gallery-item';
+                item.setAttribute('data-index', index);
+                item.innerHTML = \`
+                    <img class="gallery-image" src="\${capture.originalImageDataUrl}" alt="Capture \${index + 1}" />
+                    <button class="close-btn" onclick="removeItem(\${index}, event)" title="Remove">×</button>
+                    <div class="gallery-overlay">
+                        <button class="copy-btn" onclick="showCopyOptions(\${index}, event)">Copy</button>
+                    </div>
+                    <div class="copy-dropdown" id="dropdown\${index}">
+                        <button class="copy-option" onclick="copyItem(\${index}, 'originalImage')">
+                            📸 Original Image
+                        </button>
+                        <button class="copy-option" onclick="copyItem(\${index}, 'originalText')">
+                            📄 Original Text
+                        </button>
+                        <button class="copy-option" onclick="copyItem(\${index}, 'translatedImage')">
+                            🖼️ Translated Image
+                        </button>
+                        <button class="copy-option" onclick="copyItem(\${index}, 'translatedText')">
+                            📝 Translated Text
+                        </button>
+                    </div>
+                \`;
+                return item;
+            }
+
+            function showCopyOptions(index, event) {
+                event.stopPropagation();
+                console.log('showCopyOptions called with index:', index);
+                
+                // Close any active dropdown
+                if (activeDropdown) {
+                    activeDropdown.classList.remove('show');
+                    activeDropdown.style.display = 'none';
+                    activeDropdown = null;
+                }
+                
+                const dropdown = document.getElementById(\`dropdown\${index}\`);
+                console.log('Found dropdown:', dropdown);
+                if (dropdown) {
+                    // Simple show - CSS positioning will handle placement
+                    dropdown.style.display = 'flex';
+                    dropdown.classList.add('show');
+                    activeDropdown = dropdown;
+                    
+                    console.log('Dropdown shown for index:', index);
+                    
+                    // Auto-close after 5 seconds
+                    setTimeout(() => {
+                        if (activeDropdown === dropdown) {
+                            dropdown.classList.remove('show');
+                            dropdown.style.display = 'none';
+                            activeDropdown = null;
+                        }
+                    }, 5000);
+                } else {
+                    console.error('Dropdown not found for index:', index);
+                }
+            }
+
+            async function copyItem(index, type) {
+                const capture = captureData[index];
+                if (!capture) return;
+                
+                if (activeDropdown) {
+                    activeDropdown.classList.remove('show');
+                    activeDropdown.style.display = 'none';
+                    activeDropdown = null;
+                }
+                
+                try {
+                    switch (type) {
+                        case 'originalImage':
+                            if (capture.originalImageDataUrl) {
+                                await window.electronAPI.copyAsImage(capture.originalImageDataUrl);
+                            }
+                            break;
+                        case 'originalText':
+                            if (capture.originalText) {
+                                await window.electronAPI.copyAsText(capture.originalText);
+                            }
+                            break;
+                        case 'translatedImage':
+                            if (capture.translatedImageDataUrl) {
+                                await window.electronAPI.copyAsImage(capture.translatedImageDataUrl);
+                            }
+                            break;
+                        case 'translatedText':
+                            if (capture.translatedText) {
+                                await window.electronAPI.copyAsText(capture.translatedText);
+                            }
+                            break;
+                    }
+                } catch (error) {
+                    console.error('Copy failed:', error);
+                }
+            }
+
+            function removeItem(index, event) {
+                event.stopPropagation();
+                
+                // Close any active dropdown
+                if (activeDropdown) {
+                    activeDropdown.classList.remove('show');
+                    activeDropdown.style.display = 'none';
+                    activeDropdown = null;
+                }
+                
+                removingIndex = index;
+                
+                // Find the item being removed
+                const container = document.getElementById('galleryContainer');
+                const allItems = Array.from(container.children);
+                const itemToRemove = allItems.find(item => parseInt(item.getAttribute('data-index')) === index);
+                
+                if (itemToRemove) {
+                    // Add exit animation to the item being removed
+                    itemToRemove.classList.add('exiting');
+                    
+                    // Wait for exit animation to complete, then remove and rebuild
+                    setTimeout(() => {
+                        // Remove the item from data and notify main process
+                        captureData.splice(index, 1);
+                        window.electronAPI.removeFromGallery && window.electronAPI.removeFromGallery(index);
+                        
+                        // Reset and rebuild immediately with smooth animations
+                        removingIndex = -1;
+                        updateGallery(); // This will rebuild with correct indices and smooth animations
+                        
+                    }, 400); // Match the slideOutDown animation duration
+                }
+            }
+
+            // Close dropdowns when clicking elsewhere
+            document.addEventListener('click', (e) => {
+                if (activeDropdown && !activeDropdown.contains(e.target)) {
+                    activeDropdown.classList.remove('show');
+                    activeDropdown.style.display = 'none';
+                    activeDropdown = null;
+                }
+            });
+            
+            // Prevent dropdown from closing when clicking inside it
+            document.addEventListener('click', (e) => {
+                if (e.target.closest('.copy-dropdown')) {
+                    e.stopPropagation();
+                }
+            });
+        </script>
+    </body>
+    </html>`;
+
+    this.miniGalleryWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(galleryHtml));
+
+    this.miniGalleryWindow.once('ready-to-show', () => {
+      // Don't show automatically - let updateGalleryDisplay control visibility
+      console.log('Mini gallery window ready but staying hidden until screenshots are added');
+    });
+
+    this.miniGalleryWindow.on('closed', () => {
+      this.miniGalleryWindow = null;
+    });
+
+    console.log('Mini gallery window created (hidden)');
+  }
+
+  addCaptureToGallery(captureData, translationResult) {
+    if (!captureData || !captureData.success) {
+      return;
+    }
+
+    console.log('Adding capture to mini gallery');
+
+    // Prepare gallery item data
+    const galleryItem = {
+      id: captureData.id,
+      originalText: captureData.originalText,
+      translatedText: captureData.translatedText,
+      originalImageDataUrl: null, // Will be set below
+      translatedImageDataUrl: null, // Will be set below
+      detectedLanguage: captureData.detectedLanguage,
+      targetLanguage: captureData.targetLanguage,
+      timestamp: Date.now()
+    };
+
+    // Convert image files to data URLs
+    try {
+      // Original image
+      if (captureData.imagePath && fs.existsSync(captureData.imagePath)) {
+        const originalImageBuffer = fs.readFileSync(captureData.imagePath);
+        galleryItem.originalImageDataUrl = `data:image/png;base64,${originalImageBuffer.toString('base64')}`;
+      }
+
+      // Translated image - use translation result if available, otherwise use original
+      if (translationResult && translationResult.translatedImagePath && fs.existsSync(translationResult.translatedImagePath)) {
+        const translatedImageBuffer = fs.readFileSync(translationResult.translatedImagePath);
+        galleryItem.translatedImageDataUrl = `data:image/png;base64,${translatedImageBuffer.toString('base64')}`;
+      } else {
+        // Fallback to original image
+        galleryItem.translatedImageDataUrl = galleryItem.originalImageDataUrl;
+      }
+      
+    } catch (error) {
+      console.error('Error processing gallery image:', error);
+      return;
+    }
+
+    // Add to the beginning of the array (newest first)
+    this.captureGallery.unshift(galleryItem);
+
+    // Limit to maxGalleryItems
+    if (this.captureGallery.length > this.maxGalleryItems) {
+      this.captureGallery = this.captureGallery.slice(0, this.maxGalleryItems);
+    }
+
+    // Create gallery window if it doesn't exist
+    if (!this.miniGalleryWindow) {
+      this.createMiniGallery();
+    }
+
+    // Update the gallery display
+    this.updateGalleryDisplay();
+  }
+
+  updateGalleryDisplay() {
+    if (this.miniGalleryWindow && !this.miniGalleryWindow.isDestroyed()) {
+      if (this.captureGallery.length > 0) {
+        // Show window and send gallery data
+        if (!this.miniGalleryWindow.isVisible()) {
+          this.miniGalleryWindow.show();
+        }
+        // Make window interactive when there are screenshots
+        this.miniGalleryWindow.setIgnoreMouseEvents(false);
+        this.miniGalleryWindow.webContents.send('gallery-update', this.captureGallery);
+      } else {
+        // Hide window when no screenshots to avoid blocking
+        if (this.miniGalleryWindow.isVisible()) {
+          this.miniGalleryWindow.hide();
+        }
+      }
+    }
+  }
+
   registerShortcuts() {
     globalShortcut.register('CommandOrControl+Shift+S', async () => {
       const now = Date.now();
@@ -701,21 +1234,21 @@ class App {
         const frontmostApp = await this.getFrontmostApplication();
         console.log('Frontmost app detected:', frontmostApp);
         
-        // Step 2: Hide G-Pad AI completely (not just minimize)
+        // Step 2: Hide TransPad AI completely (not just minimize)
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
           this.mainWindow.hide();
         }
         
-        // Step 3: If the frontmost app wasn't G-Pad AI, try to restore it
-        if (frontmostApp && frontmostApp !== 'G-Pad AI' && frontmostApp !== 'Electron') {
+        // Step 3: If the frontmost app wasn't TransPad AI, try to restore it
+        if (frontmostApp && frontmostApp !== 'TransPad AI' && frontmostApp !== 'Electron') {
           console.log(`Attempting to restore ${frontmostApp}...`);
           await this.restoreFrontmostApp(frontmostApp);
           
           // Wait for the app to redraw
           await new Promise(resolve => setTimeout(resolve, 500));
         } else {
-          // If G-Pad AI was frontmost, just wait for desktop
-          console.log('G-Pad AI was frontmost, waiting for desktop...');
+          // If TransPad AI was frontmost, just wait for desktop
+          console.log('TransPad AI was frontmost, waiting for desktop...');
           await new Promise(resolve => setTimeout(resolve, 300));
         }
         
@@ -876,7 +1409,10 @@ class App {
           this.mainWindow.webContents.send('capture-complete', this.lastLupResult);
         }
 
-        // 2. Send image to Lup window to be displayed.
+        // 2. Add to mini gallery
+        this.addCaptureToGallery(this.lastLupResult, translationResult);
+
+        // 3. Send image to Lup window to be displayed.
         if (this.captureWindow && !this.captureWindow.isDestroyed()) {
           const imageBuffer = fs.readFileSync(translationResult.translatedImagePath);
           const dataUrl = `data:image/png;base64,${imageBuffer.toString('base64')}`;
@@ -1090,6 +1626,21 @@ class App {
         return { success: true, dataUrl: dataUrl };
       } catch (error) {
         console.error('Error converting image to data URL:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    // Gallery operations
+    ipcMain.handle('remove-from-gallery', async (event, index) => {
+      try {
+        if (index >= 0 && index < this.captureGallery.length) {
+          this.captureGallery.splice(index, 1);
+          this.updateGalleryDisplay();
+          console.log(`Removed gallery item at index ${index}`);
+        }
+        return { success: true };
+      } catch (error) {
+        console.error('Error removing gallery item:', error);
         return { success: false, error: error.message };
       }
     });
@@ -1343,7 +1894,7 @@ class App {
             const result = await dialog.showMessageBox(this.mainWindow, {
               type: 'info',
               title: 'Screen Recording Permission Required',
-              message: 'G-Pad AI needs screen recording permission to capture screenshots.',
+              message: 'TransPad AI needs screen recording permission to capture screenshots.',
               detail: 'When you proceed, macOS will show a permission dialog. Please click "Allow" to grant access.\n\nNote: The permission dialog may appear behind other windows - please look for it.',
               buttons: ['Proceed', 'Cancel'],
               defaultId: 0
@@ -1370,8 +1921,8 @@ class App {
             const result = await dialog.showMessageBox(this.mainWindow, {
               type: 'warning',
               title: 'Screen Recording Permission Required',
-              message: 'G-Pad AI needs screen recording permission to capture screenshots from other applications.',
-              detail: 'Please grant permission in System Preferences > Security & Privacy > Privacy > Screen Recording, then restart the app.\n\nNote: You may need to restart G-Pad AI after granting permission.',
+              message: 'TransPad AI needs screen recording permission to capture screenshots from other applications.',
+              detail: 'Please grant permission in System Preferences > Security & Privacy > Privacy > Screen Recording, then restart the app.\n\nNote: You may need to restart TransPad AI after granting permission.',
               buttons: ['Open System Preferences', 'Cancel'],
               defaultId: 0
             });

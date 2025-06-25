@@ -1,6 +1,6 @@
-# Google Cloud Credentials Setup for G-Pad AI
+# Google Cloud Credentials Setup for TransPad AI
 
-To use G-Pad AI's text extraction and translation features, you need to set up Google Cloud API credentials.
+To use TransPad AI's text extraction and translation features, you need to set up Google Cloud API credentials.
 
 ## Step 1: Create a Google Cloud Project
 
@@ -19,7 +19,7 @@ To use G-Pad AI's text extraction and translation features, you need to set up G
 
 1. Go to **APIs & Services > Credentials**
 2. Click **Create Credentials > Service Account**
-3. Enter a name like "G-Pad AI Service Account"
+3. Enter a name like "TransPad AI Service Account"
 4. Click **Create and Continue**
 5. For roles, add:
    - Cloud Vision API Service Agent

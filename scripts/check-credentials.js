@@ -14,7 +14,7 @@ const credentialsPath = path.join(__dirname, '../credentials/google-cloud-key.js
 if (!fs.existsSync(credentialsPath)) {
   console.error('❌ ERROR: Google Cloud credentials not found!');
   console.error('');
-  console.error('To build G-Pad AI, you need to provide Google Cloud credentials:');
+  console.error('To build TransPad AI, you need to provide Google Cloud credentials:');
   console.error('');
   console.error('1. Place your Google Cloud service account key file at:');
   console.error('   credentials/google-cloud-key.json');

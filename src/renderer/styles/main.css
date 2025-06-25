@@ -48,7 +48,7 @@ body {
 }
 
 .sidebar-header {
-    padding: 0 32px 36px;
+    padding: 0 24px 32px;
     position: relative;
 }
 
@@ -56,29 +56,65 @@ body {
     display: flex;
     align-items: center;
     gap: 16px;
-    font-size: 26px;
-    font-weight: 700;
+    font-size: 22px;
+    font-weight: 600;
     color: #1a202c;
     padding: 16px 20px;
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.4);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
     transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.logo::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, 
+        rgba(30, 149, 212, 0.02) 0%, 
+        rgba(212, 21, 86, 0.02) 50%, 
+        rgba(244, 232, 41, 0.02) 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.logo:hover::before {
+    opacity: 1;
 }
 
 .logo:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
-    background: rgba(255, 255, 255, 0.8);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+    background: rgba(255, 255, 255, 0.85);
+    border-color: rgba(255, 255, 255, 0.7);
 }
 
 .logo-img {
-    width: 36px;
-    height: 36px;
+    width: 56px;
+    height: 56px;
     object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 2px;
+    position: relative;
+    z-index: 2;
+}
+
+.logo span {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    position: relative;
+    z-index: 2;
 }
 
 .logo i {
