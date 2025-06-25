@@ -1000,13 +1000,13 @@ class App {
 
     ipcMain.handle('create-translated-image', async (event, { originalImagePath, originalText, translatedText, textBlocks }) => {
       try {
-        const translatedImagePath = await this.screenshotService.createImageWithTranslation(
+        const result = await this.screenshotService.createImageWithTranslation(
           originalImagePath, 
           originalText, 
-          translatedText, 
-          textBlocks
+          textBlocks,  // textBlocks should be 3rd parameter
+          this.targetLanguage  // targetLanguage should be 4th parameter
         );
-        return { success: true, imagePath: translatedImagePath };
+        return { success: true, imagePath: result.translatedImagePath };
       } catch (error) {
         console.error('Error creating translated image:', error);
         return { success: false, error: error.message };
@@ -1057,6 +1057,39 @@ class App {
         return { success: true };
       } catch (error) {
         console.error('Error copying text to clipboard:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    // History copy operations
+    ipcMain.handle('get-original-image-for-copy', async (event, imagePath) => {
+      try {
+        if (!imagePath || !fs.existsSync(imagePath)) {
+          return { success: false, error: 'Image file not found' };
+        }
+        
+        const imageBuffer = fs.readFileSync(imagePath);
+        const dataUrl = `data:image/png;base64,${imageBuffer.toString('base64')}`;
+        
+        return { success: true, imageDataUrl: dataUrl };
+      } catch (error) {
+        console.error('Error loading original image for copy:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('get-image-as-data-url', async (event, imagePath) => {
+      try {
+        if (!imagePath || !fs.existsSync(imagePath)) {
+          return { success: false, error: 'Image file not found' };
+        }
+        
+        const imageBuffer = fs.readFileSync(imagePath);
+        const dataUrl = `data:image/png;base64,${imageBuffer.toString('base64')}`;
+        
+        return { success: true, dataUrl: dataUrl };
+      } catch (error) {
+        console.error('Error converting image to data URL:', error);
         return { success: false, error: error.message };
       }
     });

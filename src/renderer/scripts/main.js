@@ -216,7 +216,7 @@ function loadHistory() {
         clearHistoryBtn.style.display = 'inline-flex';
     }
     
-    historyList.innerHTML = translationHistory.map(item => {
+    historyList.innerHTML = translationHistory.map((item, index) => {
         const date = new Date(item.timestamp);
         const formattedDate = date.getFullYear() + '-' + 
             String(date.getMonth() + 1).padStart(2, '0') + '-' + 
@@ -224,16 +224,77 @@ function loadHistory() {
             String(date.getHours()).padStart(2, '0') + ':' + 
             String(date.getMinutes()).padStart(2, '0');
         
+        const detectedLang = getLanguageName(item.detectedLanguage || 'unknown');
+        const targetLang = getLanguageName(item.language || 'unknown');
+        
         return `
-            <div class="history-item">
-                <div class="history-date">${formattedDate}</div>
+            <div class="history-item" data-index="${index}">
+                <div class="history-header">
+                    <div class="history-date-lang">
+                        <div class="history-date">${formattedDate}</div>
+                        <div class="history-languages">${detectedLang} → ${targetLang}</div>
+                    </div>
+                    <div class="history-actions">
+                        <button class="history-copy-btn" data-index="${index}" title="Copy Options">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                        <div class="history-copy-dropdown" id="historyDropdown${index}">
+                            ${item.imagePath ? `
+                                <button class="copy-option" onclick="copyHistoryItem(${index}, 'originalImage')">
+                                    <i class="fas fa-image"></i> Copy Original Image
+                                </button>
+                            ` : ''}
+                            <button class="copy-option" onclick="copyHistoryItem(${index}, 'originalText')">
+                                <i class="fas fa-file-text"></i> Copy Original Text
+                            </button>
+                            ${item.imagePath ? `
+                                <button class="copy-option" onclick="copyHistoryItem(${index}, 'translatedImage')">
+                                    <i class="fas fa-images"></i> Copy Translated Image
+                                </button>
+                            ` : ''}
+                            <button class="copy-option" onclick="copyHistoryItem(${index}, 'translatedText')">
+                                <i class="fas fa-language"></i> Copy Translated Text
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <div class="history-text">
-                    <div class="original">${item.originalText.substring(0, 100)}${item.originalText.length > 100 ? '...' : ''}</div>
-                    <div class="translated">${item.translatedText.substring(0, 100)}${item.translatedText.length > 100 ? '...' : ''}</div>
+                    <div class="original-text">
+                        <strong>Original:</strong> ${item.originalText.substring(0, 150)}${item.originalText.length > 150 ? '...' : ''}
+                    </div>
+                    <div class="translated-text">
+                        <strong>Translated:</strong> ${item.translatedText.substring(0, 150)}${item.translatedText.length > 150 ? '...' : ''}
+                    </div>
                 </div>
             </div>
         `;
     }).join('');
+    
+    // Add event listeners for copy buttons
+    document.querySelectorAll('.history-copy-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const index = btn.getAttribute('data-index');
+            const dropdown = document.getElementById(`historyDropdown${index}`);
+            
+            // Close all other dropdowns
+            document.querySelectorAll('.history-copy-dropdown').forEach(d => {
+                if (d !== dropdown) d.style.display = 'none';
+            });
+            
+            // Toggle current dropdown
+            dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+        });
+    });
+    
+    // Close dropdowns when clicking elsewhere
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.history-actions')) {
+            document.querySelectorAll('.history-copy-dropdown').forEach(d => {
+                d.style.display = 'none';
+            });
+        }
+    });
 }
 
 function showTranslationResult(translation) {
@@ -751,5 +812,82 @@ function clearHistory() {
         localStorage.setItem('translationHistory', JSON.stringify(translationHistory));
         loadHistory(); // Reload the history view to show the empty state
         showToast('Translation history cleared successfully!', 'success');
+    }
+}
+
+// Copy function for history items
+async function copyHistoryItem(index, type) {
+    const item = translationHistory[index];
+    if (!item) {
+        showError('History item not found');
+        return;
+    }
+    
+    // Close the dropdown
+    const dropdown = document.getElementById(`historyDropdown${index}`);
+    if (dropdown) {
+        dropdown.style.display = 'none';
+    }
+    
+    try {
+        switch (type) {
+            case 'originalText':
+                await window.electronAPI.copyAsText(item.originalText);
+                showSuccess('Original text copied to clipboard!');
+                break;
+                
+            case 'translatedText':
+                await window.electronAPI.copyAsText(item.translatedText);
+                showSuccess('Translated text copied to clipboard!');
+                break;
+                
+            case 'originalImage':
+                if (item.imagePath) {
+                    // Request original image from main process
+                    const result = await window.electronAPI.getOriginalImageForCopy(item.imagePath);
+                    if (result.success) {
+                        await window.electronAPI.copyAsImage(result.imageDataUrl);
+                        showSuccess('Original image copied to clipboard!');
+                    } else {
+                        showError('Failed to load original image: ' + result.error);
+                    }
+                } else {
+                    showError('Original image not available');
+                }
+                break;
+                
+            case 'translatedImage':
+                if (item.imagePath && item.textBlocks) {
+                    // Create translated image
+                    const result = await window.electronAPI.createTranslatedImage({
+                        originalImagePath: item.imagePath,
+                        originalText: item.originalText,
+                        translatedText: item.translatedText,
+                        textBlocks: item.textBlocks || []
+                    });
+                    
+                    if (result.success) {
+                        // Convert file path to data URL and copy
+                        const imageResult = await window.electronAPI.getImageAsDataUrl(result.imagePath);
+                        if (imageResult.success) {
+                            await window.electronAPI.copyAsImage(imageResult.dataUrl);
+                            showSuccess('Translated image copied to clipboard!');
+                        } else {
+                            showError('Failed to prepare image for copying');
+                        }
+                    } else {
+                        showError('Failed to create translated image: ' + result.error);
+                    }
+                } else {
+                    showError('Translated image cannot be created - missing data');
+                }
+                break;
+                
+            default:
+                showError('Unknown copy type');
+        }
+    } catch (error) {
+        console.error('Copy failed:', error);
+        showError('Copy operation failed: ' + error.message);
     }
 } 

@@ -530,11 +530,114 @@ body {
     transform: translateY(-2px);
 }
 
+.history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    gap: 12px;
+}
+
+.history-date-lang {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+}
+
 .history-date {
     font-size: 14px;
     color: #1E95D4;
     font-weight: 600;
-    margin-bottom: 8px;
+}
+
+.history-languages {
+    font-size: 12px;
+    color: #4a5568;
+    background: rgba(30, 149, 212, 0.1);
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-weight: 500;
+}
+
+.history-actions {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.history-copy-btn {
+    background: rgba(30, 149, 212, 0.1);
+    border: 1px solid rgba(30, 149, 212, 0.2);
+    color: #1E95D4;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.history-copy-btn:hover {
+    background: rgba(30, 149, 212, 0.2);
+    transform: translateY(-1px);
+}
+
+.history-copy-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 8px;
+    background: white;
+    border: 1px solid rgba(30, 149, 212, 0.2);
+    border-radius: 12px;
+    min-width: 200px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    z-index: 1000;
+}
+
+.history-copy-dropdown .copy-option {
+    padding: 12px 16px;
+    color: #2d3748;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    font-family: inherit;
+    white-space: nowrap;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.history-copy-dropdown .copy-option:hover {
+    background: rgba(30, 149, 212, 0.1);
+    color: #1E95D4;
+}
+
+.history-copy-dropdown .copy-option:not(:last-child) {
+    border-bottom: 1px solid rgba(30, 149, 212, 0.1);
+}
+
+.history-copy-dropdown .copy-option i {
+    color: #1E95D4;
+    width: 16px;
+    text-align: center;
+    transition: transform 0.2s ease;
+}
+
+.history-copy-dropdown .copy-option:hover i {
+    transform: scale(1.1);
 }
 
 .history-text {
@@ -543,14 +646,16 @@ body {
     gap: 8px;
 }
 
-.history-text .original {
+.history-text .original-text {
     color: #2d3748;
     font-weight: 500;
+    line-height: 1.5;
 }
 
-.history-text .translated {
+.history-text .translated-text {
     color: #4a5568;
     font-style: italic;
+    line-height: 1.5;
 }
 
 .empty-state {

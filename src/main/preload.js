@@ -50,6 +50,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyAsImage: (imageDataUrl) => ipcRenderer.invoke('copy-as-image', imageDataUrl),
   copyAsText: (text) => ipcRenderer.invoke('copy-as-text', text),
 
+  // History copy operations
+  getOriginalImageForCopy: (imagePath) => ipcRenderer.invoke('get-original-image-for-copy', imagePath),
+  getImageAsDataUrl: (imagePath) => ipcRenderer.invoke('get-image-as-data-url', imagePath),
+
   // Target language change listener
   onTargetLanguageChanged: (callback) => {
     ipcRenderer.on('target-language-changed', (event, language) => {

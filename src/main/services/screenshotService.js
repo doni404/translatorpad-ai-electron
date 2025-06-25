@@ -383,6 +383,7 @@ class ScreenshotService {
   async createImageWithTranslation(originalImagePath, originalText, textBlocks, targetLanguage = null) {
     try {
       console.log('🔄 Starting paragraph-by-paragraph text replacement...');
+      console.log('📋 textBlocks parameter type:', typeof textBlocks, 'length:', Array.isArray(textBlocks) ? textBlocks.length : 'N/A');
       
       const timestamp = Date.now();
       const outputPath = path.join(this.tempDir, `translated_${timestamp}.png`);
@@ -390,10 +391,16 @@ class ScreenshotService {
       const image = sharp(originalImagePath);
       const metadata = await image.metadata();
       
-      if (!textBlocks || textBlocks.length === 0) {
-        console.log('⚠️ No text blocks found, returning original image');
+      // Validate textBlocks input
+      if (!textBlocks || !Array.isArray(textBlocks) || textBlocks.length === 0) {
+        console.log('⚠️ No valid text blocks found, returning original image with simple text overlay');
         fs.copyFileSync(originalImagePath, outputPath);
-        return { translatedImagePath: outputPath, fullTranslatedText: originalText, detectedLanguage: 'unknown', targetLanguage: targetLanguage || 'unknown' };
+        return { 
+          translatedImagePath: outputPath, 
+          fullTranslatedText: originalText, 
+          detectedLanguage: 'unknown', 
+          targetLanguage: targetLanguage || 'unknown' 
+        };
       }
       
       // Use provided target language or auto-detect
@@ -476,6 +483,22 @@ class ScreenshotService {
   // Extract paragraphs from DOCUMENT_TEXT_DETECTION textBlocks
   extractParagraphsFromTextBlocks(textBlocks) {
     console.log('📋 Extracting paragraphs from DOCUMENT_TEXT_DETECTION structure...');
+    
+    // Validate textBlocks parameter
+    if (!textBlocks) {
+      console.log('⚠️ textBlocks is null or undefined');
+      return [];
+    }
+    
+    if (!Array.isArray(textBlocks)) {
+      console.log('⚠️ textBlocks is not an array:', typeof textBlocks);
+      return [];
+    }
+    
+    if (textBlocks.length === 0) {
+      console.log('⚠️ textBlocks array is empty');
+      return [];
+    }
     
     // Group text blocks by their hierarchy (pageIndex, blockIndex, paragraphIndex)
     const paragraphMap = new Map();
