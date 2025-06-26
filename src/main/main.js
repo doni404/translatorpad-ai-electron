@@ -388,6 +388,39 @@ class App {
                 text-shadow: 0 1px 3px rgba(0,0,0,0.4);
                 -webkit-app-region: no-drag; /* Make text non-draggable */
             }
+            #loading-container {
+                display: none;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                color: rgba(255, 255, 255, 0.9);
+                -webkit-app-region: no-drag;
+            }
+            .loading-spinner {
+                width: 40px;
+                height: 40px;
+                border: 3px solid rgba(255, 255, 255, 0.3);
+                border-top: 3px solid #ffffff;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 15px;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            .loading-text {
+                font-size: 14px;
+                font-weight: 600;
+                text-shadow: 0 1px 3px rgba(0,0,0,0.4);
+                text-align: center;
+            }
+            .loading-steps {
+                margin-top: 8px;
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.7);
+                text-align: center;
+            }
             #result-container {
                  position: absolute;
                  top: 1px; left: 1px; right: 1px; bottom: 1px; /* Inset within border */
@@ -535,6 +568,11 @@ class App {
         <div id="container">
             <div id="language-indicator">Any → English</div>
             <div id="instruction-text">Press Enter to Capture & Translate</div>
+            <div id="loading-container">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">Processing your capture...</div>
+                <div class="loading-steps">Extracting text and translating</div>
+            </div>
             <div id="result-container">
                  <img id="resultImage" />
             </div>
@@ -571,6 +609,7 @@ class App {
             const resultImage = document.getElementById('resultImage');
             const languageIndicator = document.getElementById('language-indicator');
             const instructionText = document.getElementById('instruction-text');
+            const loadingContainer = document.getElementById('loading-container');
 
             // Store the current result data for copying
             let currentResult = null;
@@ -582,15 +621,27 @@ class App {
                 'id': 'Any → Indonesian'
             };
 
+            // Function to show loading state
+            function showLoading() {
+                instructionText.style.display = 'none';
+                loadingContainer.style.display = 'flex';
+                resultContainer.style.display = 'none';
+            }
+
+            // Function to hide loading state
+            function hideLoading() {
+                loadingContainer.style.display = 'none';
+            }
+
             // Update language indicator when target language changes
             window.electronAPI.onTargetLanguageChanged((language) => {
                 languageIndicator.textContent = languageLabels[language] || 'Any → English';
             });
 
             document.addEventListener('keydown', (e) => {
-                // Check for Enter key and that we are not already showing a result
-                if (e.key === 'Enter' && resultContainer.style.display !== 'block') {
-                    instructionText.style.display = 'none'; // Hide instructions
+                // Check for Enter key and that we are not already showing a result or loading
+                if (e.key === 'Enter' && resultContainer.style.display !== 'block' && loadingContainer.style.display !== 'flex') {
+                    showLoading(); // Show loading immediately
                     window.electronAPI.captureLupArea();
                 }
 
@@ -607,6 +658,7 @@ class App {
             clearBtn.addEventListener('click', () => {
                 resultContainer.style.display = 'none'; // Hide image
                 instructionText.style.display = 'block'; // Show instructions again
+                hideLoading(); // Make sure loading is hidden
                 clearBtn.style.display = 'none'; // Hide self
                 copyBtn.style.display = 'none'; // Hide copy button
                 openInAppBtn.style.display = 'none'; // Hide open in app button
@@ -714,6 +766,7 @@ class App {
 
             // Listen for the translated image from main process
             window.electronAPI.onLupResult((imageDataUrl) => {
+                hideLoading(); // Hide loading first
                 resultImage.src = imageDataUrl;
                 resultContainer.style.display = 'block';
                 instructionText.style.display = 'none'; // Hide instructions on result
@@ -743,6 +796,14 @@ class App {
             window.electronAPI.onOriginalImageData((originalImageDataUrl) => {
                 if (currentResult) {
                     currentResult.originalImageDataUrl = originalImageDataUrl;
+                }
+            });
+
+            // Listen for loading step updates
+            window.electronAPI.onUpdateLoadingStep((stepText) => {
+                const loadingStepsElement = document.querySelector('.loading-steps');
+                if (loadingStepsElement) {
+                    loadingStepsElement.textContent = stepText;
                 }
             });
 
@@ -1565,12 +1626,33 @@ class App {
         const bounds = this.captureWindow.getBounds();
         console.log('Lup capture initiated with bounds:', bounds);
 
-        // --- Just-In-Time Screenshot ---
-        this.captureWindow.hide();
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // --- New Approach: Keep window visible but make it transparent for screenshot ---
+        // First, store the current window properties
+        const originalOpacity = this.captureWindow.getOpacity();
+        
+        // Update loading text - step 1
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Capturing screenshot...');
+        }
+        
+        // Make the window transparent for screenshot but keep it visible to user
+        this.captureWindow.setOpacity(0.01); // Almost transparent but still visible to OS
+        
+        // Small delay to ensure transparency is applied
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Get the screenshot with transparent window
         const screenshot = await this.screenshotService.captureFullScreenBackground();
-        this.captureWindow.show();
-        // --- End Just-In-Time Screenshot ---
+        
+        // Immediately restore window opacity so user sees loading state
+        this.captureWindow.setOpacity(originalOpacity);
+        
+        // --- End Modified Section ---
+
+        // Update loading text - step 2
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Extracting text from image...');
+        }
 
         const imagePath = await this.screenshotService.captureAreaFromExisting(
           bounds, 
@@ -1578,6 +1660,11 @@ class App {
         );
         
         const extractionResult = await this.visionService.extractText(imagePath);
+        
+        // Update loading text - step 3
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Translating text...');
+        }
         
         // Use the selected target language instead of auto-detection
         console.log(`Using selected target language: ${this.targetLanguage}`);
@@ -1637,6 +1724,12 @@ class App {
 
       } catch (error) {
         console.error('Error during lup capture process:', error);
+        
+        // Ensure window opacity is restored even if there's an error
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.setOpacity(1.0);
+        }
+        
         if (this.captureWindow) {
           this.captureWindow.close();
         }

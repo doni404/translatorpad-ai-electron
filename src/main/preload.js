@@ -129,5 +129,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
 
   // Gallery Management
-  resizeGalleryWindow: (size) => ipcRenderer.invoke('resize-gallery-window', size)
+  resizeGalleryWindow: (size) => ipcRenderer.invoke('resize-gallery-window', size),
+
+  // Loading step updates
+  onUpdateLoadingStep: (callback) => {
+    ipcRenderer.on('update-loading-step', (event, stepText) => {
+      callback(stepText);
+    });
+  }
 }); 
