@@ -150,7 +150,7 @@ class App {
             }
           },
           {
-            label: 'Translate && Replace Clipboard',
+            label: 'Translate && Paste Clipboard',
             accelerator: 'CommandOrControl+Shift+R',
             click: async () => {
               await this.translateAndReplaceClipboard();
@@ -1439,7 +1439,7 @@ class App {
 
     // Register global shortcut for clipboard translation
     globalShortcut.register('CommandOrControl+Shift+R', async () => {
-      console.log('Global "Translate & Replace Clipboard" shortcut activated.');
+      console.log('Global "Translate & Paste Clipboard" shortcut activated.');
       await this.translateAndReplaceClipboard();
     });
   }
@@ -2256,15 +2256,41 @@ class App {
         return;
       }
 
-      console.log(`Translating and replacing clipboard: "${text.substring(0, 30)}..."`);
+      console.log(`Translating and pasting clipboard: "${text.substring(0, 30)}..."`);
 
       const translatedText = await this.translationService.translateText(text, this.targetLanguage);
       if (!translatedText) {
         throw new Error('Translation service failed to return a result.');
       }
 
-      // Replace clipboard content
+      // Temporarily hide our app to focus the previous one
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.hide();
+      }
+
+      // Put the translated text on the clipboard
       clipboard.writeText(translatedText);
+      
+      // Give the OS a moment to switch focus
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Use AppleScript to simulate a paste command
+      const { exec } = require('child_process');
+      const script = `osascript -e 'tell application "System Events" to keystroke "v" using command down'`;
+      exec(script, (error) => {
+        if (error) {
+          console.error('Failed to execute paste command:', error);
+          // If pasting fails, at least the text is on the clipboard.
+          // Show the window again so the user isn't confused.
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.show();
+          }
+        } else {
+          console.log('Paste command executed successfully.');
+          // Optionally, briefly show and re-hide the window to show the notification,
+          // or just let it stay hidden. For now, we'll keep it hidden.
+        }
+      });
 
       // Store this as the last result so it can be copied
       this.lastLupResult = {
@@ -2291,7 +2317,7 @@ class App {
       console.log(`Clipboard replacement successful.`);
 
     } catch (error) {
-      console.error('Error translating and replacing clipboard:', error);
+      console.error('Error translating and pasting clipboard:', error);
       if (Notification.isSupported()) {
         new Notification({
           title: 'Translation Failed',
