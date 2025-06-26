@@ -9,10 +9,24 @@ let currentResultData = null; // Store data for re-translation
 document.addEventListener('DOMContentLoaded', async () => {
     await loadSupportedLanguages();
     await checkGoogleCloudStatus();
+    await updateAppVersion();
     loadHistory();
     setupEventListeners();
     showSection('home');
 });
+
+// Update app version in UI
+async function updateAppVersion() {
+    try {
+        const version = await window.electronAPI.getAppVersion();
+        const versionElements = document.querySelectorAll('.app-version');
+        versionElements.forEach(el => {
+            el.textContent = `Version ${version}`;
+        });
+    } catch (error) {
+        console.error('Failed to get app version:', error);
+    }
+}
 
 // Setup event listeners
 function setupEventListeners() {

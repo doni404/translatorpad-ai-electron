@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Vision and translation APIs
   extractAndTranslate: async (options) => ipcRenderer.invoke('extract-and-translate', options),
   getLanguages: async () => ipcRenderer.invoke('get-languages'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
   // File operations
   saveResult: (data) => ipcRenderer.invoke('save-result', data),

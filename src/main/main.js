@@ -328,12 +328,14 @@ class App {
     <html>
     <head>
         <meta charset="UTF-8">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
             body {
                 background-color: transparent;
                 margin: 0;
                 font-family: -apple-system, BlinkMacSystemFont, sans-serif;
                 overflow: hidden;
+                cursor: grab; /* Change cursor to indicate movement */
             }
             html {
                 overflow: hidden;
@@ -343,14 +345,40 @@ class App {
                 top: 0; left: 0; right: 0; bottom: 0;
                 box-sizing: border-box;
                 border-radius: 12px;
-                -webkit-app-region: drag; /* Allows dragging the window */
+                -webkit-app-region: drag; /* The entire window is draggable again */
+                cursor: grab; /* Change cursor to indicate movement */
                 
-                /* Refined Black & White Glass Effect */
-                background: rgba(180, 180, 180, 0.2); /* Darker glass tint */
+                /* Visual style */
+                background: rgba(180, 180, 180, 0.2);
                 backdrop-filter: blur(12px);
-                border: 1px solid rgba(255, 255, 255, 0.75); /* Thinner inner white line */
-                box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.85), /* Larger, darker outer line */
-                            0 8px 35px rgba(0,0,0,0.3); /* Adjusted depth shadow */
+                border: 1px solid rgba(255, 255, 255, 0.75);
+                box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.85), 0 8px 35px rgba(0,0,0,0.3);
+                
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                flex-direction: column; /* Center content vertically */
+            }
+            #drag-handle {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 40px; /* Height of the drag area */
+                -webkit-app-region: drag; /* This part IS draggable */
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: rgba(255,255,255,0.4);
+                font-size: 13px;
+                font-weight: 500;
+            }
+            #instruction-text {
+                color: rgba(255, 255, 255, 0.8);
+                font-size: 14px;
+                font-weight: 600;
+                text-shadow: 0 1px 3px rgba(0,0,0,0.4);
+                -webkit-app-region: no-drag; /* Make text non-draggable */
             }
             #result-container {
                  position: absolute;
@@ -379,54 +407,100 @@ class App {
             }
             #controls {
                 position: absolute;
-                top: 15px;
+                bottom: 15px; /* Moved to bottom */
                 right: 15px;
                 display: flex;
                 gap: 8px;
                 -webkit-app-region: no-drag;
             }
             .btn {
-                background: rgba(0,0,0,0.5);
-                color: white;
+                background: rgba(0,0,0,0.4); /* Default visible background */
+                color: rgba(255, 255, 255, 0.8);
                 border: 1px solid rgba(255,255,255,0.1);
-                width: 40px;
-                height: 40px;
+                width: 32px;
+                height: 32px;
                 border-radius: 50%;
-                font-size: 18px;
+                font-size: 14px; /* Adjusted for icon consistency */
                 cursor: pointer;
                 display: flex;
                 justify-content: center;
                 align-items: center;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.2);
                 transition: all 0.2s ease;
+                position: relative; /* Needed for tooltip positioning */
             }
             .btn:hover {
-                background: rgba(0,0,0,0.7);
-                transform: scale(1.1);
+                background: rgba(0,0,0,0.6);
+                color: white;
+                transform: scale(1.05);
+            }
+            .btn .tooltip {
+                visibility: hidden;
+                background-color: rgba(0,0,0,0.9);
+                color: #fff;
+                text-align: center;
+                border-radius: 4px;
+                padding: 4px 8px;
+                position: absolute;
+                z-index: 1;
+                bottom: calc(100% + 5px); /* Position 5px above button */
+                left: 50%;
+                transform: translateX(-50%); /* Modern centering */
+                opacity: 0;
+                transition: opacity 0.2s;
+                font-size: 11px;
+                font-weight: 600;
+                white-space: nowrap; /* Prevent wrapping */
+            }
+            .btn:hover .tooltip {
+                visibility: visible;
+                opacity: 1;
+            }
+            .tooltip.tooltip-bottom {
+                bottom: auto;
+                top: calc(100% + 5px);
+            }
+            #closeBtn {
+                position: absolute;
+                top: 12px;
+                right: 12px;
+                -webkit-app-region: no-drag;
             }
             
             /* Copy dropdown positioned outside the Lup */
             #copyDropdown {
                 position: absolute;
-                top: 70px;
+                bottom: 55px; /* Repositioned based on new controls */
                 right: 15px;
                 background: rgba(0,0,0,0.85);
                 backdrop-filter: blur(12px);
                 border: 1px solid rgba(255,255,255,0.2);
                 border-radius: 12px;
-                min-width: 160px;
+                min-width: 180px;
                 box-shadow: 0 4px 20px rgba(0,0,0,0.3);
                 display: none;
                 flex-direction: column;
-                overflow: hidden;
                 z-index: 1000;
                 -webkit-app-region: no-drag;
+                max-height: 95px; /* Force scrollbar on small windows */
+                overflow-y: auto; /* Allow scrolling if needed */
+            }
+            
+            #copyDropdown::-webkit-scrollbar {
+                width: 6px;
+            }
+            #copyDropdown::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            #copyDropdown::-webkit-scrollbar-thumb {
+                background-color: rgba(255,255,255,0.3);
+                border-radius: 6px;
             }
             
             .copy-option {
-                padding: 10px 14px;
+                padding: 8px 12px;
                 color: white;
-                font-size: 13px;
+                font-size: 12px; /* Smaller font */
                 font-weight: 500;
                 cursor: pointer;
                 transition: background 0.2s ease;
@@ -452,17 +526,19 @@ class App {
     <body>
         <div id="container">
             <div id="language-indicator">Any → English</div>
+            <div id="instruction-text">Press Enter to Capture & Translate</div>
             <div id="result-container">
                  <img id="resultImage" />
             </div>
         </div>
+
+        <!-- Controls are separate now -->
         <div id="controls">
-            <button id="captureBtn" class="btn" title="Capture & Translate">📸</button>
-            <button id="clearBtn" class="btn" title="Clear Translation" style="display: none;">🔄</button>
-            <button id="copyBtn" class="btn" title="Copy Result" style="display: none;">📋</button>
-            <button id="openInAppBtn" class="btn" title="Open in App" style="display: none;">↗️</button>
-            <button id="closeBtn" class="btn" title="Close Lup">❌</button>
+            <button id="clearBtn" class="btn" style="display: none;"><i class="fas fa-sync-alt"></i><span class="tooltip">Clear</span></button>
+            <button id="copyBtn" class="btn" style="display: none;"><i class="fas fa-copy"></i><span class="tooltip">Copy</span></button>
+            <button id="openInAppBtn" class="btn" style="display: none;"><i class="fas fa-arrow-up-right-from-square"></i><span class="tooltip">Go App</span></button>
         </div>
+        <button id="closeBtn" class="btn"><i class="fas fa-times"></i><span class="tooltip tooltip-bottom">Close</span></button>
         
         <!-- Copy dropdown positioned outside the Lup frame -->
         <div id="copyDropdown">
@@ -473,7 +549,7 @@ class App {
         </div>
 
         <script>
-            const captureBtn = document.getElementById('captureBtn');
+            const container = document.getElementById('container');
             const clearBtn = document.getElementById('clearBtn');
             const closeBtn = document.getElementById('closeBtn');
             const openInAppBtn = document.getElementById('openInAppBtn');
@@ -486,6 +562,7 @@ class App {
             const resultContainer = document.getElementById('result-container');
             const resultImage = document.getElementById('resultImage');
             const languageIndicator = document.getElementById('language-indicator');
+            const instructionText = document.getElementById('instruction-text');
 
             // Store the current result data for copying
             let currentResult = null;
@@ -502,9 +579,17 @@ class App {
                 languageIndicator.textContent = languageLabels[language] || 'Any → English';
             });
 
-            captureBtn.addEventListener('click', () => {
-                captureBtn.style.display = 'none'; // Hide capture button
-                window.electronAPI.captureLupArea();
+            document.addEventListener('keydown', (e) => {
+                // Check for Enter key and that we are not already showing a result
+                if (e.key === 'Enter' && resultContainer.style.display !== 'block') {
+                    instructionText.style.display = 'none'; // Hide instructions
+                    window.electronAPI.captureLupArea();
+                }
+
+                // Also listen for ESC to close
+                if (e.key === 'Escape') {
+                    window.electronAPI.closeCaptureOverlay();
+                }
             });
 
             closeBtn.addEventListener('click', () => {
@@ -513,10 +598,10 @@ class App {
 
             clearBtn.addEventListener('click', () => {
                 resultContainer.style.display = 'none'; // Hide image
+                instructionText.style.display = 'block'; // Show instructions again
                 clearBtn.style.display = 'none'; // Hide self
                 copyBtn.style.display = 'none'; // Hide copy button
                 openInAppBtn.style.display = 'none'; // Hide open in app button
-                captureBtn.style.display = 'flex'; // Show capture button again
                 copyDropdown.style.display = 'none'; // Hide dropdown
                 currentResult = null; // Clear result data
             });
@@ -602,15 +687,15 @@ class App {
             function showCopyFeedback(success, icon) {
                 if (success) {
                     copyBtn.style.background = 'rgba(34, 197, 94, 0.7)';
-                    copyBtn.textContent = '✅';
+                    copyBtn.innerHTML = '<i class="fas fa-check"></i>';
                 } else {
                     copyBtn.style.background = 'rgba(239, 68, 68, 0.7)';
-                    copyBtn.textContent = '❌';
+                    copyBtn.innerHTML = '<i class="fas fa-times"></i>';
                 }
                 
                 setTimeout(() => {
-                    copyBtn.style.background = 'rgba(0,0,0,0.5)';
-                    copyBtn.textContent = '📋';
+                    copyBtn.style.background = 'rgba(0,0,0,0.4)';
+                    copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
                 }, 1500);
             }
 
@@ -623,6 +708,7 @@ class App {
             window.electronAPI.onLupResult((imageDataUrl) => {
                 resultImage.src = imageDataUrl;
                 resultContainer.style.display = 'block';
+                instructionText.style.display = 'none'; // Hide instructions on result
                 clearBtn.style.display = 'flex'; // Show clear button
                 copyBtn.style.display = 'flex'; // Show copy button
                 openInAppBtn.style.display = 'flex'; // Show open in app button
@@ -652,12 +738,7 @@ class App {
                 }
             });
 
-            // ESC key to cancel
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') {
-                    window.electronAPI.closeCaptureOverlay();
-                }
-            });
+            // ESC key to cancel (handled in the main keydown listener now)
         </script>
     </body>
     </html>`;
@@ -725,6 +806,7 @@ class App {
     <html>
     <head>
         <meta charset="UTF-8">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
             body {
                 background-color: transparent;
@@ -866,9 +948,9 @@ class App {
             }
             
             .copy-option {
-                padding: 10px 14px;
+                padding: 8px 12px;
                 color: white;
-                font-size: 12px;
+                font-size: 12px; /* Smaller font */
                 font-weight: 500;
                 cursor: pointer;
                 transition: background 0.2s ease;
@@ -898,18 +980,18 @@ class App {
                 position: absolute;
                 top: 4px;
                 right: 4px;
-                background: rgba(255, 59, 48, 0.9);
-                border: none;
-                border-radius: 50%;
+                background: rgba(0,0,0,0.4);
+                color: rgba(255, 255, 255, 0.8);
+                border: 1px solid rgba(255,255,255,0.1);
                 width: 20px;
                 height: 20px;
+                border-radius: 50%;
+                font-size: 10px;
                 cursor: pointer;
-                font-size: 12px;
-                color: white;
                 display: none;
                 align-items: center;
                 justify-content: center;
-                font-weight: bold;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.2);
                 transition: all 0.2s ease;
                 z-index: 10;
             }
@@ -919,7 +1001,8 @@ class App {
             }
             
             .close-btn:hover {
-                background: rgba(255, 59, 48, 1);
+                background: rgba(0,0,0,0.6);
+                color: white;
                 transform: scale(1.1);
             }
         </style>
@@ -964,7 +1047,7 @@ class App {
                 item.setAttribute('data-index', index);
                 item.innerHTML = \`
                     <img class="gallery-image" src="\${capture.originalImageDataUrl}" alt="Capture \${index + 1}" />
-                    <button class="close-btn" onclick="removeItem(\${index}, event)" title="Remove">×</button>
+                    <button class="close-btn" onclick="removeItem(\${index}, event)" title="Remove"><i class="fas fa-times"></i></button>
                     <div class="gallery-overlay">
                         <button class="copy-btn" onclick="showCopyOptions(\${index}, event)">Copy</button>
                     </div>
@@ -1751,6 +1834,10 @@ class App {
         icon: image // Force the icon here
       });
       return result;
+    });
+
+    ipcMain.handle('get-app-version', () => {
+      return app.getVersion();
     });
   }
 
