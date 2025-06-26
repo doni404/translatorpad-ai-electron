@@ -16,6 +16,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLanguages: async () => ipcRenderer.invoke('get-languages'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
+  // Shortcuts Management
+  getShortcuts: () => ipcRenderer.invoke('get-shortcuts'),
+  setShortcuts: (shortcuts) => ipcRenderer.invoke('set-shortcuts', shortcuts),
+  resetShortcuts: () => ipcRenderer.invoke('reset-shortcuts'),
+  setShortcutsRecording: (isRecording) => ipcRenderer.invoke('set-shortcuts-recording', isRecording),
+  
+  // Language Management
+  getTargetLanguage: () => ipcRenderer.invoke('get-target-language'),
+  setTargetLanguage: (language) => ipcRenderer.invoke('set-target-language', language),
+
   // File operations
   saveResult: (data) => ipcRenderer.invoke('save-result', data),
   createTranslatedImage: (data) => ipcRenderer.invoke('create-translated-image', data),

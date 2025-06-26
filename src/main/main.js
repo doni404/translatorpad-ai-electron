@@ -4,6 +4,7 @@ const fs = require('fs');
 const { VisionService } = require('./services/visionService');
 const { TranslationService } = require('./services/translationService');
 const { ScreenshotService } = require('./services/screenshotService');
+const { StoreService } = require('./services/storeService');
 
 class App {
   constructor() {
@@ -12,14 +13,16 @@ class App {
     this.miniGalleryWindow = null; // New persistent gallery window
     this.visionService = new VisionService();
     this.translationService = new TranslationService();
+    this.storeService = new StoreService();
     this.screenshotService = new ScreenshotService(this.translationService);
     this.hasUsedCaptureSuccessfully = false;
     this.globalShortcutInProgress = false; // Prevent duplicate shortcut calls
     this.lastShortcutTime = 0; // Add cooldown tracking
     this.lastLupResult = null; // Store the last lup result for the "Open in App" feature
-    this.targetLanguage = 'en'; // Default target language: English
+    this.targetLanguage = this.storeService.getTargetLanguage(); // Load from store
     this.captureGallery = []; // Store recent captures (max 5)
     this.maxGalleryItems = 5; // Limit gallery to 5 items
+    this.shortcutsRecordingActive = false; // Flag to prevent shortcuts during recording
     
     this.init();
   }
@@ -86,6 +89,8 @@ class App {
   }
 
   createMenu() {
+    const shortcuts = this.storeService.getShortcuts();
+    
     const template = [
       {
         label: 'TransPad AI',
@@ -142,7 +147,7 @@ class App {
         submenu: [
           {
             label: 'Capture && Translate',
-            accelerator: 'CommandOrControl+Shift+S',
+            accelerator: shortcuts['capture-translate'],
             click: () => {
               if (this.mainWindow && !this.mainWindow.isDestroyed()) {
                 this.mainWindow.webContents.send('trigger-capture');
@@ -151,14 +156,14 @@ class App {
           },
           {
             label: 'Translate && Paste Clipboard',
-            accelerator: 'CommandOrControl+Shift+R',
+            accelerator: shortcuts['translate-paste'],
             click: async () => {
               await this.translateAndReplaceClipboard();
             }
           },
           {
             label: 'Copy Last Translation',
-            accelerator: 'CommandOrControl+Shift+V',
+            accelerator: shortcuts['copy-last-translation'],
             click: () => {
               if (this.lastLupResult && this.lastLupResult.translatedText) {
                 clipboard.writeText(this.lastLupResult.translatedText);
@@ -282,6 +287,9 @@ class App {
   setTargetLanguage(language) {
     this.targetLanguage = language;
     console.log(`Target language set to: ${language}`);
+    
+    // Save to store
+    this.storeService.setTargetLanguage(language);
     
     // Update the menu to reflect the new selection
     this.createMenu();
@@ -1286,162 +1294,192 @@ class App {
   }
 
   registerShortcuts() {
-    globalShortcut.register('CommandOrControl+Shift+S', async () => {
-      const now = Date.now();
-      
-      // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
-      if (now - this.lastShortcutTime < 2000) {
-        console.log('Global shortcut on cooldown, ignoring');
-        return;
-      }
-      
-      // CRITICAL: Prevent duplicate shortcut executions
-      if (this.globalShortcutInProgress) {
-        console.log('Global shortcut in progress, ignoring');
-        return;
-      }
-      
-      // ADDITIONAL PROTECTION: Check if capture window already exists
-      if (this.captureWindow) {
-        console.log('Capture window exists, ignoring shortcut');
-        return;
-      }
-      
-      this.globalShortcutInProgress = true;
-      this.lastShortcutTime = now;
-      console.log('Global shortcut activated');
-      
-      console.log('Global shortcut pressed - starting smart capture sequence...');
-      
-      try {
-        // Check permissions silently first
-        const hasPermission = await this.checkScreenPermissions(false);
-        if (!hasPermission) {
-          console.log('Screen recording permission needed, showing permission dialog...');
-          // Now show the dialog since permission is actually needed
-          const dialogResult = await this.checkScreenPermissions(true);
-          if (!dialogResult) {
-            this.globalShortcutInProgress = false;
-            this.lastShortcutTime = 0;
+    // Unregister all shortcuts before registering new ones to prevent conflicts
+    globalShortcut.unregisterAll();
+    
+    const shortcuts = this.storeService.getShortcuts();
+    
+    // Register capture & translate shortcut
+    try {
+      if (shortcuts['capture-translate'] && shortcuts['capture-translate'].trim()) {
+        globalShortcut.register(shortcuts['capture-translate'], async () => {
+          // Prevent execution if shortcuts are being recorded
+          if (this.shortcutsRecordingActive) {
+            console.log('Shortcuts recording active, ignoring global shortcut');
             return;
           }
           
-          // If permission was "not-determined", we need to trigger the system dialog
-          const initialStatus = systemPreferences.getMediaAccessStatus('screen');
-          if (initialStatus === 'not-determined') {
-            console.log('Triggering system permission dialog...');
+          const now = Date.now();
+          
+          // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
+          if (now - this.lastShortcutTime < 2000) {
+            console.log('Global shortcut on cooldown, ignoring');
+            return;
+          }
+          
+          // CRITICAL: Prevent duplicate shortcut executions
+          if (this.globalShortcutInProgress) {
+            console.log('Global shortcut in progress, ignoring');
+            return;
+          }
+          
+          // ADDITIONAL PROTECTION: Check if capture window already exists
+          if (this.captureWindow) {
+            console.log('Capture window exists, ignoring shortcut');
+            return;
+          }
+          
+          this.globalShortcutInProgress = true;
+          this.lastShortcutTime = now;
+          console.log('Global shortcut activated');
+          
+          console.log('Global shortcut pressed - starting smart capture sequence...');
+          
+          try {
+            // Check permissions silently first
+            const hasPermission = await this.checkScreenPermissions(false);
+            if (!hasPermission) {
+              console.log('Screen recording permission needed, showing permission dialog...');
+              // Now show the dialog since permission is actually needed
+              const dialogResult = await this.checkScreenPermissions(true);
+              if (!dialogResult) {
+                this.globalShortcutInProgress = false;
+                this.lastShortcutTime = 0;
+                return;
+              }
+              
+              // If permission was "not-determined", we need to trigger the system dialog
+              const initialStatus = systemPreferences.getMediaAccessStatus('screen');
+              if (initialStatus === 'not-determined') {
+                console.log('Triggering system permission dialog...');
+                
+                // Ensure main window is visible to show toast messages
+                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                  this.mainWindow.show();
+                  this.mainWindow.focus();
+                }
+                
+                // Take a quick screenshot to trigger the system permission dialog
+                try {
+                  await this.screenshotService.captureFullScreen();
+                } catch (error) {
+                  console.log('Screenshot attempt triggered permission dialog (expected)');
+                }
+                
+                // Wait for user to grant permission
+                const permissionGranted = await this.waitForScreenPermission();
+                if (!permissionGranted) {
+                  console.log('Permission denied via global shortcut');
+                  // Keep main window visible on permission denial
+                  if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                    this.mainWindow.show();
+                    this.mainWindow.focus();
+                  }
+                  this.globalShortcutInProgress = false;
+                  this.lastShortcutTime = 0;
+                  return;
+                }
+                
+                // IMPORTANT: Permission was just granted, so we need to verify it's actually working
+                // Wait a moment for the system to fully apply the permission
+                console.log('Permission granted, verifying...');
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Double-check permission status
+                const finalStatus = systemPreferences.getMediaAccessStatus('screen');
+                if (finalStatus !== 'granted') {
+                  console.log('Permission verification failed:', finalStatus);
+                  // Keep main window visible on permission issue
+                  if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                    this.mainWindow.show();
+                    this.mainWindow.focus();
+                  }
+                  this.globalShortcutInProgress = false;
+                  this.lastShortcutTime = 0;
+                  return;
+                }
+              }
+            }
             
-            // Ensure main window is visible to show toast messages
+            console.log('Permission check passed, proceeding with capture...');
+            
+            // NEW STRATEGY: Use system APIs to properly handle window switching
+            
+            // Step 1: Get the current frontmost app before we interfere
+            const frontmostApp = await this.getFrontmostApplication();
+            console.log('Frontmost app detected:', frontmostApp);
+            
+            // Step 2: Hide TransPad AI completely (not just minimize)
+            if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+              this.mainWindow.hide();
+            }
+            
+            // Step 3: If the frontmost app wasn't TransPad AI, try to restore it
+            if (frontmostApp && frontmostApp !== 'TransPad AI' && frontmostApp !== 'Electron') {
+              console.log(`Attempting to restore ${frontmostApp}...`);
+              await this.restoreFrontmostApp(frontmostApp);
+              
+              // Wait for the app to redraw
+              await new Promise(resolve => setTimeout(resolve, 500));
+            } else {
+              // If TransPad AI was frontmost, just wait for desktop
+              console.log('TransPad AI was frontmost, waiting for desktop...');
+              await new Promise(resolve => setTimeout(resolve, 300));
+            }
+            
+            // Step 4: Take screenshot
+            console.log('Taking screenshot of current state...');
+            const preCapture = await this.screenshotService.captureFullScreenBackground();
+            this.preCaptureScreenshot = preCapture;
+            console.log('Pre-capture completed, creating overlay...');
+            
+            // Step 5: Show overlay for selection - with additional check
+            if (!this.captureWindow) {
+              await this.startScreenCaptureWithoutPreCapture();
+            } else {
+              console.log('❌ Capture window created during process, skipping overlay creation');
+            }
+            
+            // Mark that we've used capture successfully (for future runs)
+            this.hasUsedCaptureSuccessfully = true;
+            
+            // DO NOT reset flag here - wait for actual capture completion or cancellation
+            
+          } catch (error) {
+            console.error('Error in smart capture sequence:', error);
+            // On error, restore the main window
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
               this.mainWindow.show();
               this.mainWindow.focus();
             }
-            
-            // Take a quick screenshot to trigger the system permission dialog
-            try {
-              await this.screenshotService.captureFullScreen();
-            } catch (error) {
-              console.log('Screenshot attempt triggered permission dialog (expected)');
-            }
-            
-            // Wait for user to grant permission
-            const permissionGranted = await this.waitForScreenPermission();
-            if (!permissionGranted) {
-              console.log('Permission denied via global shortcut');
-              // Keep main window visible on permission denial
-              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                this.mainWindow.show();
-                this.mainWindow.focus();
-              }
-              this.globalShortcutInProgress = false;
-              this.lastShortcutTime = 0;
-              return;
-            }
-            
-            // IMPORTANT: Permission was just granted, so we need to verify it's actually working
-            // Wait a moment for the system to fully apply the permission
-            console.log('Permission granted, verifying...');
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-            // Double-check permission status
-            const finalStatus = systemPreferences.getMediaAccessStatus('screen');
-            if (finalStatus !== 'granted') {
-              console.log('Permission verification failed:', finalStatus);
-              // Keep main window visible on permission issue
-              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                this.mainWindow.show();
-                this.mainWindow.focus();
-              }
-              this.globalShortcutInProgress = false;
-              this.lastShortcutTime = 0;
-              return;
-            }
+            // Reset flag on error
+            this.globalShortcutInProgress = false;
+            this.lastShortcutTime = 0;
+            console.log('Global shortcut error, flag reset');
           }
-        }
-        
-        console.log('Permission check passed, proceeding with capture...');
-        
-        // NEW STRATEGY: Use system APIs to properly handle window switching
-        
-        // Step 1: Get the current frontmost app before we interfere
-        const frontmostApp = await this.getFrontmostApplication();
-        console.log('Frontmost app detected:', frontmostApp);
-        
-        // Step 2: Hide TransPad AI completely (not just minimize)
-        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.hide();
-        }
-        
-        // Step 3: If the frontmost app wasn't TransPad AI, try to restore it
-        if (frontmostApp && frontmostApp !== 'TransPad AI' && frontmostApp !== 'Electron') {
-          console.log(`Attempting to restore ${frontmostApp}...`);
-          await this.restoreFrontmostApp(frontmostApp);
-          
-          // Wait for the app to redraw
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } else {
-          // If TransPad AI was frontmost, just wait for desktop
-          console.log('TransPad AI was frontmost, waiting for desktop...');
-          await new Promise(resolve => setTimeout(resolve, 300));
-        }
-        
-        // Step 4: Take screenshot
-        console.log('Taking screenshot of current state...');
-        const preCapture = await this.screenshotService.captureFullScreenBackground();
-        this.preCaptureScreenshot = preCapture;
-        console.log('Pre-capture completed, creating overlay...');
-        
-        // Step 5: Show overlay for selection - with additional check
-        if (!this.captureWindow) {
-          await this.startScreenCaptureWithoutPreCapture();
-        } else {
-          console.log('❌ Capture window created during process, skipping overlay creation');
-        }
-        
-        // Mark that we've used capture successfully (for future runs)
-        this.hasUsedCaptureSuccessfully = true;
-        
-        // DO NOT reset flag here - wait for actual capture completion or cancellation
-        
-      } catch (error) {
-        console.error('Error in smart capture sequence:', error);
-        // On error, restore the main window
-        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.show();
-          this.mainWindow.focus();
-        }
-        // Reset flag on error
-        this.globalShortcutInProgress = false;
-        this.lastShortcutTime = 0;
-        console.log('Global shortcut error, flag reset');
+        });
       }
-    });
+    } catch (error) {
+      console.error('Error registering shortcuts:', error);
+    }
 
     // Register global shortcut for clipboard translation
-    globalShortcut.register('CommandOrControl+Shift+R', async () => {
-      console.log('Global "Translate & Paste Clipboard" shortcut activated.');
-      await this.translateAndReplaceClipboard();
-    });
+    try {
+      if (shortcuts['translate-paste'] && shortcuts['translate-paste'].trim()) {
+        globalShortcut.register(shortcuts['translate-paste'], async () => {
+          // Prevent execution if shortcuts are being recorded
+          if (this.shortcutsRecordingActive) {
+            console.log('Shortcuts recording active, ignoring global shortcut');
+            return;
+          }
+          
+          console.log('Global "Translate & Paste Clipboard" shortcut activated.');
+          await this.translateAndReplaceClipboard();
+        });
+      }
+    } catch (error) {
+      console.error('Error registering translate-paste shortcut:', error);
+    }
   }
 
   setupIpcHandlers() {
@@ -1857,6 +1895,52 @@ class App {
 
     ipcMain.handle('get-app-version', () => {
       return app.getVersion();
+    });
+
+    // Shortcut Management
+    ipcMain.handle('get-shortcuts', () => {
+      return this.storeService.getShortcuts();
+    });
+
+    ipcMain.handle('set-shortcuts', (event, shortcuts) => {
+      // Validate shortcuts before saving
+      const validShortcuts = {};
+      for (const [key, shortcut] of Object.entries(shortcuts)) {
+        if (shortcut && typeof shortcut === 'string' && shortcut.trim().length > 0) {
+          // Basic validation: must contain at least one letter/number after modifiers
+          if (/[a-zA-Z0-9]/.test(shortcut)) {
+            validShortcuts[key] = shortcut.trim();
+          } else {
+            console.warn(`Invalid shortcut for ${key}: ${shortcut}`);
+          }
+        }
+      }
+      
+      this.storeService.setShortcuts(validShortcuts);
+      this.registerShortcuts(); // Re-register with the new settings
+      this.createMenu(); // Rebuild menu to show updated shortcuts
+    });
+
+    ipcMain.handle('reset-shortcuts', () => {
+      const shortcuts = this.storeService.resetShortcuts();
+      this.registerShortcuts();
+      this.createMenu(); // Rebuild menu to show updated shortcuts
+      return shortcuts;
+    });
+
+    // Language Management
+    ipcMain.handle('get-target-language', () => {
+      return this.storeService.getTargetLanguage();
+    });
+
+    ipcMain.handle('set-target-language', (event, language) => {
+      this.setTargetLanguage(language);
+    });
+
+    // Shortcuts Recording Control
+    ipcMain.handle('set-shortcuts-recording', (event, isRecording) => {
+      this.shortcutsRecordingActive = isRecording;
+      console.log(`Shortcuts recording ${isRecording ? 'activated' : 'deactivated'}`);
     });
   }
 

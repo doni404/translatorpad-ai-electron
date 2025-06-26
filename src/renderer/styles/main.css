@@ -530,6 +530,36 @@ body {
     height: 20px;
 }
 
+.shortcut-input {
+    padding: 8px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    background: white;
+    color: #2d3748;
+    min-width: 200px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.shortcut-input:hover {
+    border-color: #cbd5e0;
+}
+
+.shortcut-input:focus, .shortcut-input.recording {
+    border-color: #1E95D4;
+    box-shadow: 0 0 0 3px rgba(30, 149, 212, 0.2);
+    outline: none;
+}
+
+.shortcut-input.recording {
+    background: rgba(30, 149, 212, 0.05);
+    color: #1E95D4;
+}
+
 .api-status {
     display: flex;
     align-items: center;
