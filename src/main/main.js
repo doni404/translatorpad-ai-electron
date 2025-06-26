@@ -773,17 +773,17 @@ class App {
     // Get screen dimensions for positioning
     const { screen } = require('electron');
     const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
+    const { height: screenHeight } = primaryDisplay.workArea;
 
-    // Gallery dimensions
-    const galleryWidth = 400; // Much wider to accommodate dropdown without cropping
-    const galleryHeight = Math.min(500, screenHeight - 80); // Larger gallery
+    // Gallery dimensions - START SMALL, will be resized dynamically
+    const galleryWidth = 170; // Width for one item + padding
+    const galleryHeight = 50; // A small initial height
 
     this.miniGalleryWindow = new BrowserWindow({
       width: galleryWidth,
       height: galleryHeight,
       x: 15, // Add margin from left edge
-      y: screenHeight - galleryHeight, // Exactly at bottom
+      y: screenHeight - galleryHeight, // Start position, will be adjusted
       transparent: true,
       frame: false,
       alwaysOnTop: true,
@@ -814,36 +814,36 @@ class App {
                 padding: 0;
                 font-family: -apple-system, BlinkMacSystemFont, sans-serif;
                 overflow: hidden; /* Remove scroll capability */
+                pointer-events: none; /* Make body and all empty areas click-through */
             }
             
             .gallery-container {
                 display: flex;
                 flex-direction: column-reverse;
-                justify-content: flex-start;
+                justify-content: flex-start; /* Items will start from the bottom */
                 gap: 10px;
-                height: 100vh;
-                width: 100vw;
-                background: transparent;
+                /* Let the height be determined by content */
+                width: 100%;
                 padding: 12px;
-                padding-top: 0;
                 box-sizing: border-box;
-                overflow: hidden; /* Remove scroll capability */
+                pointer-events: auto; /* Allow hover events on the container and its children */
             }
             
             .gallery-item {
                 position: relative;
-                width: 110px;
-                height: 85px;
+                width: 140px; /* Fixed width */
+                height: 110px; /* Fixed height */
                 border-radius: 8px;
-                overflow: visible; /* Allow dropdown to extend outside item */
+                overflow: visible; /* CRITICAL: Allow buttons and tooltips to be visible */
                 cursor: pointer;
-                transition: transform 0.2s ease; /* Shorter, simpler transition */
+                transition: transform 0.2s ease;
                 background: rgba(255, 255, 255, 0.1);
                 backdrop-filter: blur(8px);
                 border: 1px solid rgba(255, 255, 255, 0.2);
                 opacity: 0;
                 transform: translateY(20px);
                 animation: slideInUp 0.4s ease-out forwards;
+                flex-shrink: 0; /* Prevent items from shrinking */
             }
             
             .gallery-item:hover {
@@ -884,7 +884,7 @@ class App {
             .gallery-image {
                 width: 100%;
                 height: 100%;
-                object-fit: cover;
+                object-fit: cover; /* This is key for fitting any aspect ratio */
                 border-radius: 7px;
             }
             
@@ -895,81 +895,89 @@ class App {
                 right: 0;
                 bottom: 0;
                 background: rgba(0, 0, 0, 0.6);
-                display: none;
-                align-items: center;
+                display: flex; /* Use flex for layout but hide with opacity */
+                flex-direction: column;
                 justify-content: center;
+                align-items: center;
+                gap: 5px;
                 border-radius: 7px;
-                overflow: visible; /* Allow dropdown to extend outside */
+                overflow: visible; /* CRITICAL: Allow buttons and tooltips to be visible */
+                /* Transition properties for a smooth fade */
+                opacity: 0;
+                visibility: hidden;
+                transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
             }
             
             .gallery-item:hover .gallery-overlay {
-                display: flex;
+                opacity: 1;
+                visibility: visible;
             }
             
-            .copy-btn {
-                background: rgba(128, 128, 128, 0.9);
-                border: none;
-                border-radius: 16px;
-                padding: 6px 12px;
-                cursor: pointer;
+            .gallery-actions-row {
+                display: flex;
+                gap: 5px;
+            }
+            
+            .gallery-btn {
+                position: relative; /* For tooltip positioning */
+                background: rgba(0,0,0,0.5);
+                color: rgba(255, 255, 255, 0.9);
+                border: 1px solid rgba(255,255,255,0.1);
+                width: 28px;
+                height: 28px;
+                border-radius: 50%;
                 font-size: 12px;
-                font-weight: 600;
-                color: white;
-                transition: all 0.2s ease;
-                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                position: relative;
-            }
-            
-            .copy-btn:hover {
-                background: rgba(100, 100, 100, 1);
-                transform: scale(1.05);
-            }
-            
-            .copy-dropdown {
-                position: absolute; /* Use absolute positioning within the gallery window */
-                left: 125px; /* Position to the right of the gallery item */
-                top: 50%;
-                transform: translateY(-50%);
-                background: rgba(0, 0, 0, 0.9);
-                backdrop-filter: blur(12px);
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                border-radius: 8px;
-                min-width: 180px;
-                display: none;
-                flex-direction: column;
-                overflow: hidden;
-                z-index: 1000;
-                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-                pointer-events: auto;
-            }
-            
-            .copy-dropdown.show {
-                display: flex !important;
-            }
-            
-            .copy-option {
-                padding: 8px 12px;
-                color: white;
-                font-size: 12px; /* Smaller font */
-                font-weight: 500;
                 cursor: pointer;
-                transition: background 0.2s ease;
                 display: flex;
+                justify-content: center;
                 align-items: center;
-                gap: 8px;
-                border: none;
-                background: transparent;
-                text-align: left;
-                font-family: inherit;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+                transition: all 0.2s ease;
+            }
+            
+            .gallery-btn:hover {
+                background: rgba(0,0,0,0.7);
+                color: white;
+                transform: scale(1.1);
+                z-index: 20; /* Ensure tooltip appears on top */
+            }
+            
+            .gallery-btn .tooltip {
+                visibility: hidden;
+                background-color: rgba(0,0,0,0.95);
+                color: #fff;
+                text-align: center;
+                border-radius: 4px;
+                padding: 3px 6px;
+                position: absolute;
+                z-index: 100;
+                left: 50%;
+                transform: translateX(-50%);
+                opacity: 0;
+                transition: opacity 0.2s, visibility 0.2s;
+                font-size: 10px;
+                font-weight: 500;
                 white-space: nowrap;
+                pointer-events: none; /* Prevent tooltip from interfering with mouse */
             }
             
-            .copy-option:hover {
-                background: rgba(255, 255, 255, 0.15);
+            /* Default position: above the button */
+            .gallery-btn .tooltip {
+                bottom: 100%;
+                margin-bottom: 5px;
             }
-            
-            .copy-option:not(:last-child) {
-                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+
+            /* Modifier for tooltips below the button */
+            .gallery-btn .tooltip.tooltip-bottom {
+                top: 100%;
+                bottom: auto;
+                margin-bottom: 0;
+                margin-top: 5px;
+            }
+
+            .gallery-btn:hover .tooltip {
+                visibility: visible;
+                opacity: 1;
             }
             
             .gallery-item.empty {
@@ -988,16 +996,20 @@ class App {
                 border-radius: 50%;
                 font-size: 10px;
                 cursor: pointer;
-                display: none;
+                display: flex; /* Use flex for layout but hide with opacity */
                 align-items: center;
                 justify-content: center;
                 box-shadow: 0 1px 3px rgba(0,0,0,0.2);
                 transition: all 0.2s ease;
                 z-index: 10;
+                /* Transition properties for a smooth fade */
+                opacity: 0;
+                visibility: hidden;
             }
             
             .gallery-item:hover .close-btn {
-                display: flex;
+                opacity: 1;
+                visibility: visible;
             }
             
             .close-btn:hover {
@@ -1030,14 +1042,17 @@ class App {
                 if (removingIndex === -1) {
                     container.innerHTML = '';
                     
-                    // Add items in normal order - flex-direction: column-reverse will handle positioning
-                    // Newest items will appear at bottom due to column-reverse
                     captureData.forEach((capture, index) => {
                         const item = createGalleryItem(capture, index);
-                        // Add entering animation for new items
                         item.classList.add('entering');
                         container.appendChild(item);
                     });
+                    
+                    // After rendering, calculate the required window height and send it to main
+                    setTimeout(() => {
+                        const requiredHeight = container.scrollHeight;
+                        window.electronAPI.resizeGalleryWindow({ height: requiredHeight });
+                    }, 50);
                 }
             }
 
@@ -1049,130 +1064,111 @@ class App {
                     <img class="gallery-image" src="\${capture.originalImageDataUrl}" alt="Capture \${index + 1}" />
                     <button class="close-btn" onclick="removeItem(\${index}, event)" title="Remove"><i class="fas fa-times"></i></button>
                     <div class="gallery-overlay">
-                        <button class="copy-btn" onclick="showCopyOptions(\${index}, event)">Copy</button>
-                    </div>
-                    <div class="copy-dropdown" id="dropdown\${index}">
-                        <button class="copy-option" onclick="copyItem(\${index}, 'originalImage')">
-                            📸 Original Image
-                        </button>
-                        <button class="copy-option" onclick="copyItem(\${index}, 'originalText')">
-                            📄 Original Text
-                        </button>
-                        <button class="copy-option" onclick="copyItem(\${index}, 'translatedImage')">
-                            🖼️ Translated Image
-                        </button>
-                        <button class="copy-option" onclick="copyItem(\${index}, 'translatedText')">
-                            📝 Translated Text
-                        </button>
+                        <div class="gallery-actions-row">
+                             <button class="gallery-btn" onclick="copyItem(\${index}, 'originalImage')"><i class="fas fa-camera"></i><span class="tooltip tooltip-bottom">Original Img</span></button>
+                             <button class="gallery-btn" onclick="copyItem(\${index}, 'translatedImage')"><i class="fas fa-image"></i><span class="tooltip tooltip-bottom">Translated Img</span></button>
+                        </div>
+                        <div class="gallery-actions-row">
+                             <button class="gallery-btn" onclick="copyItem(\${index}, 'originalText')"><i class="fas fa-file-alt"></i><span class="tooltip">Original Txt</span></button>
+                             <button class="gallery-btn" onclick="copyItem(\${index}, 'translatedText')"><i class="fas fa-language"></i><span class="tooltip">Translated Txt</span></button>
+                        </div>
                     </div>
                 \`;
                 return item;
-            }
-
-            function showCopyOptions(index, event) {
-                event.stopPropagation();
-                console.log('showCopyOptions called with index:', index);
-                
-                // Close any active dropdown
-                if (activeDropdown) {
-                    activeDropdown.classList.remove('show');
-                    activeDropdown.style.display = 'none';
-                    activeDropdown = null;
-                }
-                
-                const dropdown = document.getElementById(\`dropdown\${index}\`);
-                console.log('Found dropdown:', dropdown);
-                if (dropdown) {
-                    // Simple show - CSS positioning will handle placement
-                    dropdown.style.display = 'flex';
-                    dropdown.classList.add('show');
-                    activeDropdown = dropdown;
-                    
-                    console.log('Dropdown shown for index:', index);
-                    
-                    // Auto-close after 5 seconds
-                    setTimeout(() => {
-                        if (activeDropdown === dropdown) {
-                            dropdown.classList.remove('show');
-                            dropdown.style.display = 'none';
-                            activeDropdown = null;
-                        }
-                    }, 5000);
-                } else {
-                    console.error('Dropdown not found for index:', index);
-                }
             }
 
             async function copyItem(index, type) {
                 const capture = captureData[index];
                 if (!capture) return;
                 
-                if (activeDropdown) {
-                    activeDropdown.classList.remove('show');
-                    activeDropdown.style.display = 'none';
-                    activeDropdown = null;
+                // Find the button that was clicked to give feedback
+                const itemElement = document.querySelector(\`.gallery-item[data-index='\${index}']\`);
+                let clickedButton;
+
+                // This is a bit verbose but necessary to map type to the button
+                switch(type) {
+                    case 'originalImage': clickedButton = itemElement.querySelector('.fa-camera').parentElement; break;
+                    case 'translatedImage': clickedButton = itemElement.querySelector('.fa-image').parentElement; break;
+                    case 'originalText': clickedButton = itemElement.querySelector('.fa-file-alt').parentElement; break;
+                    case 'translatedText': clickedButton = itemElement.querySelector('.fa-language').parentElement; break;
                 }
-                
+
                 try {
+                    let success = false;
                     switch (type) {
                         case 'originalImage':
                             if (capture.originalImageDataUrl) {
                                 await window.electronAPI.copyAsImage(capture.originalImageDataUrl);
+                                success = true;
                             }
                             break;
                         case 'originalText':
                             if (capture.originalText) {
                                 await window.electronAPI.copyAsText(capture.originalText);
+                                success = true;
                             }
                             break;
                         case 'translatedImage':
                             if (capture.translatedImageDataUrl) {
                                 await window.electronAPI.copyAsImage(capture.translatedImageDataUrl);
+                                success = true;
                             }
                             break;
                         case 'translatedText':
                             if (capture.translatedText) {
                                 await window.electronAPI.copyAsText(capture.translatedText);
+                                success = true;
                             }
                             break;
                     }
+                    
+                    if (clickedButton && success) {
+                        showCopyFeedback(clickedButton, true);
+                    } else if (clickedButton) {
+                        showCopyFeedback(clickedButton, false);
+                    }
+
                 } catch (error) {
                     console.error('Copy failed:', error);
+                    if (clickedButton) {
+                        showCopyFeedback(clickedButton, false);
+                    }
                 }
+            }
+            
+            function showCopyFeedback(button, success) {
+                const originalIcon = button.innerHTML;
+                if (success) {
+                    button.innerHTML = '<i class="fas fa-check"></i>';
+                    button.style.background = 'rgba(34, 197, 94, 0.7)';
+                } else {
+                    button.innerHTML = '<i class="fas fa-times"></i>';
+                    button.style.background = 'rgba(239, 68, 68, 0.7)';
+                }
+                
+                setTimeout(() => {
+                    button.innerHTML = originalIcon;
+                    button.style.background = 'rgba(0,0,0,0.5)';
+                }, 1500);
             }
 
             function removeItem(index, event) {
                 event.stopPropagation();
-                
-                // Close any active dropdown
-                if (activeDropdown) {
-                    activeDropdown.classList.remove('show');
-                    activeDropdown.style.display = 'none';
-                    activeDropdown = null;
-                }
-                
                 removingIndex = index;
                 
-                // Find the item being removed
                 const container = document.getElementById('galleryContainer');
                 const allItems = Array.from(container.children);
                 const itemToRemove = allItems.find(item => parseInt(item.getAttribute('data-index')) === index);
                 
                 if (itemToRemove) {
-                    // Add exit animation to the item being removed
                     itemToRemove.classList.add('exiting');
                     
-                    // Wait for exit animation to complete, then remove and rebuild
+                    // Wait for animation, then just tell the main process to remove it.
+                    // The main process will send back a 'gallery-update' which will trigger a re-render.
                     setTimeout(() => {
-                        // Remove the item from data and notify main process
-                        captureData.splice(index, 1);
-                        window.electronAPI.removeFromGallery && window.electronAPI.removeFromGallery(index);
-                        
-                        // Reset and rebuild immediately with smooth animations
-                        removingIndex = -1;
-                        updateGallery(); // This will rebuild with correct indices and smooth animations
-                        
-                    }, 400); // Match the slideOutDown animation duration
+                        window.electronAPI.removeFromGallery(index);
+                        removingIndex = -1; // Reset the animation lock
+                    }, 400);
                 }
             }
 
@@ -1261,10 +1257,14 @@ class App {
     // Create gallery window if it doesn't exist
     if (!this.miniGalleryWindow) {
       this.createMiniGallery();
+      // IMPORTANT: Wait for the gallery to be fully ready before sending the first update
+      this.miniGalleryWindow.once('ready-to-show', () => {
+        this.updateGalleryDisplay();
+      });
+    } else {
+        // If it already exists, update it right away
+        this.updateGalleryDisplay();
     }
-
-    // Update the gallery display
-    this.updateGalleryDisplay();
   }
 
   updateGalleryDisplay() {
@@ -1274,11 +1274,10 @@ class App {
         if (!this.miniGalleryWindow.isVisible()) {
           this.miniGalleryWindow.show();
         }
-        // Make window interactive when there are screenshots
-        this.miniGalleryWindow.setIgnoreMouseEvents(false);
+        // Let the renderer calculate its own size, just send the data
         this.miniGalleryWindow.webContents.send('gallery-update', this.captureGallery);
       } else {
-        // Hide window when no screenshots to avoid blocking
+        // Hide window when no screenshots
         if (this.miniGalleryWindow.isVisible()) {
           this.miniGalleryWindow.hide();
         }
@@ -1806,12 +1805,32 @@ class App {
     });
 
     // Gallery operations
+    ipcMain.handle('resize-gallery-window', (event, { height }) => {
+        if (this.miniGalleryWindow && !this.miniGalleryWindow.isDestroyed()) {
+            const { screen } = require('electron');
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const { height: screenHeight } = primaryDisplay.workArea;
+            
+            const currentBounds = this.miniGalleryWindow.getBounds();
+            const newHeight = Math.max(0, height); // Ensure height is not negative
+
+            // Animate is smoother on macOS this way
+            this.miniGalleryWindow.setBounds({
+                x: currentBounds.x,
+                y: screenHeight - newHeight, // Reposition based on new height
+                width: currentBounds.width, // Width stays constant
+                height: newHeight
+            }, true); // Animate the change
+        }
+    });
+    
     ipcMain.handle('remove-from-gallery', async (event, index) => {
       try {
         if (index >= 0 && index < this.captureGallery.length) {
           this.captureGallery.splice(index, 1);
+          // After removing, send the updated gallery back to the renderer
           this.updateGalleryDisplay();
-          console.log(`Removed gallery item at index ${index}`);
+          console.log(`Removed gallery item at index ${index}, updated gallery sent.`);
         }
         return { success: true };
       } catch (error) {

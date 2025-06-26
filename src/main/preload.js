@@ -117,4 +117,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // External Links
   openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
+
+  // Gallery Management
+  resizeGalleryWindow: (size) => ipcRenderer.invoke('resize-gallery-window', size)
 }); 
