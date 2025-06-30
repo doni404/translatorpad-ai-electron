@@ -67,6 +67,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Gallery item removal
   removeFromGallery: (index) => ipcRenderer.invoke('remove-from-gallery', index),
 
+  // Image viewer operations
+  openImageInNewWindow: (imageData) => ipcRenderer.invoke('open-image-in-new-window', imageData),
+  onUpdateImage: (callback) => {
+    ipcRenderer.on('update-image', (event, imageData) => {
+      callback(imageData);
+    });
+  },
+
   // Clipboard operations
   copyAsImage: (imageDataUrl) => ipcRenderer.invoke('copy-as-image', imageDataUrl),
   copyAsText: (text) => ipcRenderer.invoke('copy-as-text', text),

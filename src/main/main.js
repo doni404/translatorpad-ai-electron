@@ -11,6 +11,7 @@ class App {
     this.mainWindow = null;
     this.captureWindow = null;
     this.miniGalleryWindow = null; // New persistent gallery window
+    this.imageViewerWindow = null; // For the singleton viewer window
     this.visionService = new VisionService();
     this.translationService = new TranslationService();
     this.storeService = new StoreService();
@@ -312,10 +313,25 @@ class App {
       return;
     }
     
+    // Get screen dimensions to calculate 60% size and center position
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
+    
+    // Calculate 60% of screen dimensions
+    const windowWidth = Math.round(screenWidth * 0.6);
+    const windowHeight = Math.round(screenHeight * 0.6);
+    
+    // Calculate center position
+    const x = Math.round((screenWidth - windowWidth) / 2);
+    const y = Math.round((screenHeight - windowHeight) / 2);
+    
     // Create the movable, resizable "Lup" window
     this.captureWindow = new BrowserWindow({
-      width: 500,
-      height: 400,
+      width: windowWidth,
+      height: windowHeight,
+      x: x,
+      y: y,
       transparent: true,
       frame: false,
       alwaysOnTop: true,
@@ -330,7 +346,11 @@ class App {
       }
     });
 
-    this.captureWindow.center();
+    // Don't use center() since we've calculated the exact position
+    // this.captureWindow.center(); // Remove this line
+
+    // Remove this line as we're positioning manually
+    // this.captureWindow.center();
 
     const lupHtml = `
     <!DOCTYPE html>
@@ -1231,6 +1251,15 @@ class App {
                     </div>
                 \`;
 
+                // Add double-click event listener for enlarging
+                item.addEventListener('dblclick', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (!isDragging) {
+                        enlargeImage(index);
+                    }
+                });
+
                 // Add event listeners with proper error handling
                 const closeBtn = item.querySelector('.close-btn');
                 if (closeBtn) {
@@ -1273,6 +1302,34 @@ class App {
                 
                 return item;
             }
+            
+            function enlargeImage(index) {
+                const capture = captureData[index];
+                if (!capture) return;
+                
+                // Get the current showing image (translated or original based on the indicator)
+                const galleryItem = document.querySelector(\`[data-index="\${index}"]\`);
+                const indicator = galleryItem ? galleryItem.querySelector('.image-type-indicator') : null;
+                const currentShowing = indicator ? indicator.getAttribute('data-showing') : 'translated';
+                
+                const imageToShow = currentShowing === 'translated' 
+                    ? (capture.translatedImageDataUrl || capture.originalImageDataUrl)
+                    : capture.originalImageDataUrl;
+                
+                // Send request to main process to create new window
+                window.electronAPI.openImageInNewWindow({
+                    imageDataUrl: imageToShow,
+                    capture: capture,
+                    currentShowing: currentShowing
+                });
+            }
+
+            function closeModal() {
+                // Remove this function as we're no longer using modals
+            }
+
+            // Remove modal event listeners
+            // No longer needed as we're using separate windows
             
             function toggleImageView(index, itemElement) {
                 const capture = captureData[index];
@@ -1543,6 +1600,133 @@ class App {
     });
 
     console.log('Mini gallery window created (hidden)');
+  }
+
+  createImageViewerWindow(imageData) {
+    // --- SINGLETON LOGIC ---
+    if (this.imageViewerWindow && !this.imageViewerWindow.isDestroyed()) {
+      console.log('Image viewer already open, updating image...');
+      this.imageViewerWindow.webContents.send('update-image', imageData);
+      this.imageViewerWindow.focus();
+      return;
+    }
+
+    // --- WINDOW CREATION (if not already open) ---
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
+    
+    const windowWidth = Math.round(screenWidth * 0.6);
+    const windowHeight = Math.round(screenHeight * 0.6);
+    
+    const x = Math.round((screenWidth - windowWidth) / 2);
+    const y = Math.round((screenHeight - windowHeight) / 2);
+
+    this.imageViewerWindow = new BrowserWindow({
+      width: windowWidth,
+      height: windowHeight,
+      x: x,
+      y: y,
+      title: 'TransPad AI - Image Viewer',
+      transparent: true,
+      frame: false,
+      alwaysOnTop: false,
+      skipTaskbar: false,
+      resizable: true,
+      movable: true,
+      hasShadow: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.js')
+      },
+      icon: path.join(__dirname, '../../assets/icons/transpad_512x512.png')
+    });
+
+    const viewerHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <style>
+            body { background-color: transparent; margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; overflow: hidden; }
+            #container { position: absolute; top: 0; left: 0; right: 0; bottom: 0; border-radius: 12px; background: rgba(30, 30, 30, 0.75); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 20px 60px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+            .header { height: 50px; flex-shrink: 0; display: flex; align-items: center; padding: 0 15px; -webkit-app-region: drag; }
+            .content { flex-grow: 1; display: flex; justify-content: center; align-items: center; padding: 0 20px 20px 20px; -webkit-app-region: no-drag; overflow: hidden; }
+            .viewer-image { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
+            .title { color: rgba(255,255,255,0.7); font-weight: 600; font-size: 14px; margin: 0 auto; }
+            .btn { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); border: none; width: 32px; height: 32px; border-radius: 50%; font-size: 14px; cursor: pointer; display: flex; justify-content: center; align-items: center; transition: all 0.2s ease; -webkit-app-region: no-drag; position: absolute; }
+            #closeBtn { top: 9px; left: 15px; }
+            #closeBtn:hover { background: rgba(239, 68, 68, 0.8); color: white; }
+            #toggleBtn { top: 9px; right: 15px; width: auto; padding: 0 12px; border-radius: 16px; font-size: 12px; font-weight: 500; }
+            #toggleBtn:hover { background: rgba(255,255,255,0.2); }
+        </style>
+    </head>
+    <body>
+        <div id="container">
+            <div class="header">
+                <button id="closeBtn" class="btn"><i class="fas fa-times"></i></button>
+                <span class="title">Image Viewer</span>
+                <button id="toggleBtn" class="btn" style="${imageData.capture.originalImageDataUrl === imageData.capture.translatedImageDataUrl ? 'display: none;' : ''}">
+                    Switch to ${imageData.currentShowing === 'translated' ? 'Original' : 'Translated'}
+                </button>
+            </div>
+            <div class="content">
+                <img class="viewer-image" id="viewerImage" src="${imageData.imageDataUrl}" alt="Screenshot">
+            </div>
+        </div>
+
+        <script>
+            let currentShowing, captureData;
+            const viewerImage = document.getElementById('viewerImage');
+            const toggleBtn = document.getElementById('toggleBtn');
+            const closeBtn = document.getElementById('closeBtn');
+
+            function updateContent(data) {
+                currentShowing = data.currentShowing;
+                captureData = data.capture;
+                viewerImage.src = data.imageDataUrl;
+                toggleBtn.textContent = \`Switch to \${currentShowing === 'translated' ? 'Original' : 'Translated'}\`;
+                toggleBtn.style.display = captureData.originalImageDataUrl === captureData.translatedImageDataUrl ? 'none' : 'block';
+            }
+
+            toggleBtn.addEventListener('click', () => {
+                if (currentShowing === 'translated') {
+                    viewerImage.src = captureData.originalImageDataUrl;
+                    toggleBtn.textContent = 'Switch to Translated';
+                    currentShowing = 'original';
+                } else {
+                    viewerImage.src = captureData.translatedImageDataUrl;
+                    toggleBtn.textContent = 'Switch to Original';
+                    currentShowing = 'translated';
+                }
+            });
+
+            closeBtn.addEventListener('click', () => window.close());
+            document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+            
+            // Listen for updates to replace the image
+            window.electronAPI.onUpdateImage((newImageData) => {
+                updateContent(newImageData);
+            });
+            
+            // Initial load
+            updateContent(${JSON.stringify(imageData)});
+        </script>
+    </body>
+    </html>`;
+
+    this.imageViewerWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(viewerHtml));
+
+    this.imageViewerWindow.once('ready-to-show', () => {
+      this.imageViewerWindow.show();
+      this.imageViewerWindow.focus();
+    });
+
+    this.imageViewerWindow.on('closed', () => {
+      this.imageViewerWindow = null;
+    });
   }
 
   addCaptureToGallery(captureData, translationResult) {
@@ -2364,6 +2548,18 @@ class App {
         return { success: true };
       } catch (error) {
         console.error('Error ending image drag:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    // Image viewer window operations
+    ipcMain.handle('open-image-in-new-window', async (event, imageData) => {
+      try {
+        console.log('Creating new image viewer window');
+        this.createImageViewerWindow(imageData);
+        return { success: true };
+      } catch (error) {
+        console.error('Error creating image viewer window:', error);
         return { success: false, error: error.message };
       }
     });
