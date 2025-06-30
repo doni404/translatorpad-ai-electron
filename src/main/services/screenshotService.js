@@ -382,66 +382,67 @@ class ScreenshotService {
   // CORE TEXT REPLACEMENT METHOD - Paragraph-by-paragraph translation with precise overlays
   async createImageWithTranslation(originalImagePath, originalText, textBlocks, targetLanguage = null) {
     try {
-      console.log('🖼️ Creating new image with translated text...');
-      console.log(`Using target language: ${targetLanguage || 'Default'}`);
+      console.log('🖼️ Creating new image with translated text (Advanced Replacement)...');
 
-      // Detect source language for better UI display
       let detectedLanguage = 'unknown';
       if (originalText && originalText.trim()) {
         try {
-          const detectionResult = await this.translationService.detectLanguage(originalText);
-          if (detectionResult) {
-            detectedLanguage = detectionResult.language || 'unknown';
-          }
+            const detectionResult = await this.translationService.detectLanguage(originalText);
+            if (detectionResult) detectedLanguage = detectionResult.language || 'unknown';
         } catch (e) {
-          console.warn('Could not detect source language', e.message);
+            console.warn('Could not detect source language', e.message);
         }
       }
-      console.log(`Detected source language: ${detectedLanguage}`);
-      
-      const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks, originalImagePath);
-      console.log(`Found ${paragraphs.length} paragraphs to process`);
 
-      const overlays = [];
+      const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks, originalImagePath);
+      const compositeOverlays = [];
       let fullTranslatedText = '';
 
-      // Get dimensions of the original image
-      const metadata = await sharp(originalImagePath).metadata();
-      const imageWidth = metadata.width;
-      const imageHeight = metadata.height;
+      const { width: imageWidth, height: imageHeight } = await sharp(originalImagePath).metadata();
 
-      // Translate paragraph by paragraph
       for (const paragraph of paragraphs) {
         try {
           const translatedText = await this.translationService.translateText(paragraph.text, targetLanguage);
-          
-          if (translatedText) {
-            fullTranslatedText += translatedText + '\n';
-            
-            // Generate overlay for this translated paragraph
-            const overlay = await this.createParagraphOverlay(
-              paragraph, 
-              translatedText, 
-              imageWidth, // Pass image width
-              imageHeight // Pass image height
-            );
-            
-            if (overlay) {
-              overlays.push(overlay);
-            }
-          }
+          if (!translatedText) continue;
+
+          fullTranslatedText += translatedText + '\n';
+          const { minX, minY, maxX, maxY } = paragraph.boundingBox;
+          const width = maxX - minX;
+          const height = maxY - minY;
+
+          if (width <= 0 || height <= 0) continue;
+
+          // 1. "Heal" the background by covering old text
+          const backgroundColor = await this.sampleBackgroundColor(originalImagePath, paragraph.boundingBox);
+          compositeOverlays.push({
+            input: { create: { width, height, channels: 4, background: backgroundColor } },
+            left: minX,
+            top: minY,
+          });
+
+          // 2. Prepare the new text overlay
+          const textColor = this.getContrastingTextColor(backgroundColor);
+          const estimatedCharsPerLine = Math.max(1, width / 10);
+          const estimatedLines = Math.ceil(translatedText.length / estimatedCharsPerLine);
+          let fontSize = Math.floor(height / Math.max(1, estimatedLines) * 0.75);
+          fontSize = Math.max(12, Math.min(fontSize, 40));
+
+          const textSvg = await this.createParagraphTextOverlay(translatedText, { width, height }, fontSize, textColor);
+          compositeOverlays.push({
+            input: Buffer.from(textSvg),
+            left: minX,
+            top: minY,
+          });
+
         } catch (error) {
-          console.error(`❌ Error in paragraph-by-paragraph text replacement:`, error);
+          console.error('❌ Error processing paragraph:', error);
         }
       }
 
-      // Create the final image
       const timestamp = Date.now();
       const translatedImagePath = path.join(this.tempDir, `translated_${timestamp}.png`);
       
-      await sharp(originalImagePath)
-        .composite(overlays)
-        .toFile(translatedImagePath);
+      await sharp(originalImagePath).composite(compositeOverlays).toFile(translatedImagePath);
 
       console.log('✅ Translated image created:', translatedImagePath);
       
@@ -461,23 +462,11 @@ class ScreenshotService {
   extractParagraphsFromTextBlocks(textBlocks, originalImagePath) {
     console.log('📋 Extracting paragraphs from DOCUMENT_TEXT_DETECTION structure...');
     
-    // Validate textBlocks parameter
-    if (!textBlocks) {
-      console.log('⚠️ textBlocks is null or undefined');
+    if (!textBlocks || !Array.isArray(textBlocks) || textBlocks.length === 0) {
+      console.log('⚠️ textBlocks is invalid or empty');
       return [];
     }
     
-    if (!Array.isArray(textBlocks)) {
-      console.log('⚠️ textBlocks is not an array:', typeof textBlocks);
-      return [];
-    }
-    
-    if (textBlocks.length === 0) {
-      console.log('⚠️ textBlocks array is empty');
-      return [];
-    }
-    
-    // Group text blocks by their hierarchy (pageIndex, blockIndex, paragraphIndex)
     const paragraphMap = new Map();
     
     textBlocks.forEach(textBlock => {
@@ -500,450 +489,124 @@ class ScreenshotService {
       paragraphMap.get(paragraphKey).words.push(textBlock);
     });
     
-    // Convert paragraph groups to structured paragraphs
     const paragraphs = [];
     
-    paragraphMap.forEach((paragraphGroup, key) => {
-      if (paragraphGroup.words.length === 0) {
-        return;
-      }
+    paragraphMap.forEach((paragraphGroup) => {
+      if (paragraphGroup.words.length === 0) return;
       
-      // Sort words by position (left to right, top to bottom)
       paragraphGroup.words.sort((a, b) => {
         const aY = a.vertices[0].y;
         const bY = b.vertices[0].y;
-        const aX = a.vertices[0].x;
-        const bX = b.vertices[0].x;
-        
-        // If on roughly the same line (within 10px), sort by X
-        if (Math.abs(aY - bY) <= 10) {
-          return aX - bX;
-        }
-        // Otherwise sort by Y
+        if (Math.abs(aY - bY) <= 10) return a.vertices[0].x - b.vertices[0].x;
         return aY - bY;
       });
       
-      // Combine words into paragraph text
       const paragraphText = paragraphGroup.words.map(word => word.text).join(' ');
       
-      // Calculate combined bounding box for the paragraph
-      const allXs = [];
-      const allYs = [];
-      
-      paragraphGroup.words.forEach(word => {
-        word.vertices.forEach(vertex => {
-          allXs.push(vertex.x || 0);
-          allYs.push(vertex.y || 0);
-        });
-      });
-      
-      const left = Math.min(...allXs);
-      const top = Math.min(...allYs);
-      const right = Math.max(...allXs);
-      const bottom = Math.max(...allYs);
+      const allXs = paragraphGroup.words.flatMap(word => word.vertices.map(v => v.x || 0));
+      const allYs = paragraphGroup.words.flatMap(word => word.vertices.map(v => v.y || 0));
       
       const paragraph = {
         text: paragraphText,
         boundingBox: {
-          minX: left,
-          minY: top,
-          maxX: right,
-          maxY: bottom,
+          minX: Math.min(...allXs),
+          minY: Math.min(...allYs),
+          maxX: Math.max(...allXs),
+          maxY: Math.max(...allYs),
         },
-        words: paragraphGroup.words,
-        hierarchy: paragraphGroup.hierarchy,
-        imagePath: originalImagePath // Pass image path for color sampling
+        imagePath: originalImagePath
       };
       
       paragraphs.push(paragraph);
-      
-      console.log(`📄 Paragraph ${paragraphs.length}: "${paragraphText.substring(0, 50)}..." (${paragraphGroup.words.length} words)`);
     });
     
-    // Sort paragraphs by position (top to bottom, left to right)
     paragraphs.sort((a, b) => {
-      const aY = a.boundingBox.top;
-      const bY = b.boundingBox.top;
-      const aX = a.boundingBox.left;
-      const bX = b.boundingBox.left;
-      
-      // If paragraphs are roughly on the same vertical level (within 20px), sort by X
-      if (Math.abs(aY - bY) <= 20) {
-        return aX - bX;
-      }
-      // Otherwise sort by Y
-      return aY - bY;
+        const aY = a.boundingBox.minY;
+        const bY = b.boundingBox.minY;
+        if (Math.abs(aY - bY) <= 20) return a.boundingBox.minX - b.boundingBox.minX;
+        return aY - bY;
     });
     
-    console.log(`📊 Extracted ${paragraphs.length} paragraphs from ${textBlocks.length} word blocks`);
+    console.log(`📊 Extracted ${paragraphs.length} paragraphs.`);
     return paragraphs;
   }
 
-  // Create a single overlay for a paragraph of text
-  async createParagraphOverlay(paragraph, translatedText, imageWidth, imageHeight) {
-    if (!paragraph || !paragraph.boundingBox || !translatedText) {
-      return null;
-    }
-
-    try {
-      // 1. Calculate the available bounding box for the paragraph
-      const { minX, minY, maxX, maxY } = paragraph.boundingBox;
-      const width = maxX - minX;
-      const height = maxY - minY;
-
-      if (width <= 0 || height <= 0) {
-        return null; // Ignore empty boxes
-      }
-
-      // --- FIX: Add a simple dynamic font size calculation ---
-      const estimatedCharsPerLine = Math.max(1, (width / 10)); // Assume avg char width is ~10px
-      const estimatedLines = Math.ceil(translatedText.length / estimatedCharsPerLine);
-      let fontSize = Math.floor(height / Math.max(1, estimatedLines) * 0.75); // Use 75% of available line height
-      fontSize = Math.max(12, Math.min(fontSize, 40)); // Clamp font size to be readable
-      console.log(`🔠 Calculated font size: ${fontSize}px for paragraph`);
-
-      // 2. Sample the background color from the original image at this position
-      const backgroundColor = await this.sampleBackgroundColor(paragraph.imagePath, paragraph.boundingBox);
-      
-      // 3. Determine a contrasting text color
-      const textColor = this.getContrastingTextColor(backgroundColor);
-
-      // 4. Create the text overlay SVG, now with the correct background color.
-      const svgTextOverlay = this.createParagraphTextOverlay(
-        translatedText, 
-        { width, height }, 
-        fontSize,
-        textColor, 
-        backgroundColor
-      );
-
-      if (!svgTextOverlay) {
-        console.warn('⚠️ SVG text overlay generation failed.');
-        return null;
-      }
-
-      // 5. The SVG now contains the background and text. Just convert it to a buffer.
-      let combinedOverlayBuffer = Buffer.from(svgTextOverlay);
-
-      // --- FIX: Check if overlay exceeds image boundaries and crop if necessary ---
-      const overlayMetadata = await sharp(combinedOverlayBuffer).metadata();
-      
-      let finalWidth = overlayMetadata.width;
-      let finalHeight = overlayMetadata.height;
-      let clipped = false;
-
-      if (minX + finalWidth > imageWidth) {
-        finalWidth = imageWidth - minX;
-        clipped = true;
-      }
-      if (minY + finalHeight > imageHeight) {
-        finalHeight = imageHeight - minY;
-        clipped = true;
-      }
-
-      if (clipped) {
-        console.log(`✂️ Overlay for paragraph at (${minX}, ${minY}) would exceed image boundaries. Clipping to fit.`);
-        if (finalWidth > 0 && finalHeight > 0) {
-          combinedOverlayBuffer = await sharp(combinedOverlayBuffer)
-            .extract({ left: 0, top: 0, width: finalWidth, height: finalHeight })
-            .toBuffer();
-        } else {
-          console.warn('⚠️ Overlay is entirely outside image bounds, skipping.');
-          return null;
-        }
-      }
-
-      return {
-        input: combinedOverlayBuffer,
-        left: minX,
-        top: minY
-      };
-
-    } catch (error) {
-      console.error('Error creating paragraph overlay:', error);
-      return null;
-    }
-  }
-
-  // Create SVG overlay for a paragraph with natural paragraph flow
-  createParagraphTextOverlay(text, boundingBox, fontSize, textColor, backgroundColor) {
-    // Calculate padding based on font size
-    const padding = Math.max(6, fontSize * 0.3);
-    
-    // Overlay dimensions with padding
-    const overlayWidth = boundingBox.width + (padding * 2);
-    const overlayHeight = boundingBox.height + (padding * 2);
-    
-    // Calculate text flow parameters with improved line spacing
-    const lineHeight = fontSize * 2.8; // Match original line spacing (about 54px between lines)
-    const availableWidth = boundingBox.width - (padding * 2);
-    
-    // Character width estimation for mixed text
-    let avgCharWidthRatio = 0.55;
-    const cjkCharCount = (text.match(/[\u3000-\u9fff]/g) || []).length;
-    const totalChars = text.length;
-    const cjkRatio = cjkCharCount / totalChars;
-    
-    if (cjkRatio > 0.5) {
-      avgCharWidthRatio = 0.65;
-    } else if (cjkRatio > 0.2) {
-      avgCharWidthRatio = 0.6;
-    }
-    
-    const avgCharWidth = fontSize * avgCharWidthRatio;
-    const maxCharsPerLine = Math.floor(availableWidth / avgCharWidth);
-    
-    console.log(`📐 Text flow calculation:`);
-    console.log(`  Available width: ${availableWidth}px`);
-    console.log(`  CJK ratio: ${(cjkRatio * 100).toFixed(1)}%`);
-    console.log(`  Char width ratio: ${avgCharWidthRatio}`);
-    console.log(`  Avg char width: ${avgCharWidth.toFixed(1)}px`);
-    console.log(`  Max chars per line: ${maxCharsPerLine}`);
-    console.log(`  Line height: ${lineHeight}px`);
-    
-    // Split text into meaningful segments
-    const segments = [];
-    let currentSegment = '';
-    let currentWidth = 0;
-    
-    // Split into meaningful chunks (words or CJK characters)
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i];
-      const isCJK = /[\u3000-\u9fff]/.test(char);
-      const isSpace = /\s/.test(char);
-      const isPunctuation = /[。、．，！？!?,.]/.test(char);
-      
-      if (isCJK || isPunctuation) {
-        // Add current non-CJK word if exists
-        if (currentSegment) {
-          segments.push(currentSegment);
-          currentSegment = '';
-        }
-        segments.push(char);
-      } else if (isSpace) {
-        // Add current word if exists
-        if (currentSegment) {
-          segments.push(currentSegment);
-          currentSegment = '';
-        }
-        segments.push(char);
-      } else {
-        currentSegment += char;
-      }
-    }
-    
-    // Add final segment if exists
-    if (currentSegment) {
-      segments.push(currentSegment);
-    }
-    
-    // Create lines with proper wrapping
+  async createParagraphTextOverlay(text, boundingBox, fontSize, textColor) {
+    const { width, height } = boundingBox;
+    const words = text.split(' ');
     const lines = [];
     let currentLine = '';
-    currentWidth = 0;
-    
-    for (const segment of segments) {
-      const isCJK = /[\u3000-\u9fff]/.test(segment);
-      const isSpace = /\s/.test(segment);
-      const segmentWidth = segment.length * (isCJK ? avgCharWidth : avgCharWidth * 0.8);
-      
-      // Start new line if adding this segment would exceed width
-      if (currentWidth + segmentWidth > availableWidth && currentLine) {
-        lines.push(currentLine.trim());
-        currentLine = '';
-        currentWidth = 0;
-      }
-      
-      // Add segment to current line
-      currentLine += segment;
-      currentWidth += segmentWidth;
-      
-      // Force line break after sentence endings
-      if (/[。．！？!?.]/.test(segment)) {
-        if (currentLine) {
-          lines.push(currentLine.trim());
-          currentLine = '';
-          currentWidth = 0;
+
+    for (const word of words) {
+        const testLine = currentLine ? `${currentLine} ${word}` : word;
+
+        // Create a temporary SVG to measure the text width accurately
+        const tempSvg = `<svg><text font-family="-apple-system, sans-serif" font-size="${fontSize}px">${this.escapeXml(testLine)}</text></svg>`;
+        const { info } = await sharp(Buffer.from(tempSvg)).toBuffer({ resolveWithObject: true });
+
+        if (info.width < width) {
+            currentLine = testLine;
+        } else {
+            if (currentLine) lines.push(currentLine);
+            currentLine = word;
         }
-      }
     }
-    
-    // Add final line if exists
-    if (currentLine) {
-      lines.push(currentLine.trim());
-    }
-    
-    console.log(`📝 Text wrapped into ${lines.length} lines:`);
-    lines.forEach((line, index) => {
-      console.log(`  Line ${index + 1}: "${line.substring(0, 40)}${line.length > 40 ? '...' : ''}"`);
-    });
-    
-    // Calculate required height
-    const textHeight = lines.length * lineHeight;
-    const minRequiredHeight = textHeight + (padding * 2);
-    const finalOverlayHeight = Math.max(overlayHeight, minRequiredHeight);
-    
-    console.log(`📊 Height calculation:`);
-    console.log(`  Original height: ${overlayHeight}px`);
-    console.log(`  Required for text: ${minRequiredHeight}px`);
-    console.log(`  Final height: ${finalOverlayHeight}px`);
-    
-    // Create text elements with proper positioning
+    if (currentLine) lines.push(currentLine);
+
+    const lineHeight = fontSize * 1.2;
+    const totalTextHeight = lines.length * lineHeight;
+    const startY = (height - totalTextHeight) / 2 + (lineHeight / 2);
+
     const textElements = lines.map((line, index) => {
-      const lineX = padding;
-      const lineY = padding + (lineHeight * (index + 1)) - (fontSize * 0.3);
-      
-      return `<text x="${lineX}" y="${lineY}" 
-                    font-family="Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans CJK JP', sans-serif" 
-                    font-size="${fontSize}px" 
-                    font-weight="400"
-                    fill="${textColor}" 
-                    text-anchor="start"
-                    dominant-baseline="alphabetic"
-                    style="text-rendering: optimizeLegibility; letter-spacing: 0.02em;">${this.escapeXml(line)}</text>`;
+        const y = startY + (index * lineHeight);
+        const escapedLine = this.escapeXml(line);
+        return `<text x="5" y="${y}" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="${fontSize}px" fill="${textColor}" text-anchor="start" dominant-baseline="middle">${escapedLine}</text>`;
     }).join('');
-    
-    // Create SVG with proper layout
-    return `
-      <svg width="${overlayWidth}" height="${finalOverlayHeight}" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <filter id="textShadow" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="1" dy="1" stdDeviation="1" flood-color="rgba(0,0,0,0.3)"/>
-          </filter>
-        </defs>
-        
-        <rect x="0" y="0" width="${overlayWidth}" height="${finalOverlayHeight}" 
-              fill="${backgroundColor}" 
-              opacity="0.92"
-              rx="6"
-              ry="6"
-              stroke="rgba(0,0,0,0.1)"
-              stroke-width="1"/>
-        
-        ${textElements}
-      </svg>
-    `;
+
+    return `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">${textElements}</svg>`;
   }
 
-  // Enhanced background color sampling with better fallback
   async sampleBackgroundColor(imagePath, boundingBox) {
     try {
-      // --- FIX: Use correct bounding box properties (minX/minY) ---
       const { minX, minY, maxX, maxY } = boundingBox;
-      const width = maxX - minX;
-      const height = maxY - minY;
+      const extractWidth = Math.max(1, maxX - minX);
+      const extractHeight = Math.max(1, maxY - minY);
 
-      // Sample area around the text bounding box for better color detection
-      const sampleMargin = 8;
-      const sampleX = Math.max(0, minX - sampleMargin);
-      const sampleY = Math.max(0, minY - sampleMargin);
-      const sampleWidth = Math.min(50, width + (sampleMargin * 2));
-      const sampleHeight = Math.min(50, height + (sampleMargin * 2));
-      
-      const { data, info } = await sharp(imagePath)
-        .extract({
-          left: sampleX,
-          top: sampleY,
-          width: sampleWidth,
-          height: sampleHeight
-        })
-        .raw()
+      const { data } = await sharp(imagePath)
+        .extract({ left: minX, top: minY, width: extractWidth, height: extractHeight })
+        .blur(5)
         .toBuffer({ resolveWithObject: true });
+
+      const centerX = Math.floor(extractWidth / 2);
+      const centerY = Math.floor(extractHeight / 2);
+      const pixelIndex = (centerY * extractWidth + (channels || 4)) * centerX;
       
-      // Sample multiple strategic points for better color estimation
-      const { width: extractWidth, height: extractHeight, channels } = info;
-      const cornerSamples = [
-        // Four corners of the sample area
-        { x: 0, y: 0 },
-        { x: extractWidth - 1, y: 0 },
-        { x: 0, y: extractHeight - 1 },
-        { x: extractWidth - 1, y: extractHeight - 1 },
-        // Center point
-        { x: Math.floor(extractWidth / 2), y: Math.floor(extractHeight / 2) }
-      ];
+      const r = data[pixelIndex];
+      const g = data[pixelIndex + 1];
+      const b = data[pixelIndex + 2];
       
-      let totalR = 0, totalG = 0, totalB = 0;
-      let validSamples = 0;
-      
-      for (const sample of cornerSamples) {
-        const pixelIndex = (sample.y * extractWidth + sample.x) * channels;
-        if (pixelIndex + 2 < data.length) {
-          totalR += data[pixelIndex];
-          totalG += data[pixelIndex + 1];
-          totalB += data[pixelIndex + 2];
-          validSamples++;
-        }
-      }
-      
-      if (validSamples > 0) {
-        const avgR = Math.round(totalR / validSamples);
-        const avgG = Math.round(totalG / validSamples);
-        const avgB = Math.round(totalB / validSamples);
-        
-        console.log(`🎨 Sampled background color: rgb(${avgR}, ${avgG}, ${avgB}) from ${validSamples} points`);
-        return `rgb(${avgR}, ${avgG}, ${avgB})`;
-      }
-      
-      // Fallback to overall area average if corner sampling fails
-      totalR = totalG = totalB = 0;
-      const pixelCount = data.length / channels;
-      
-      for (let i = 0; i < data.length; i += channels) {
-        totalR += data[i];
-        totalG += data[i + 1];
-        totalB += data[i + 2];
-      }
-      
-      const avgR = Math.round(totalR / pixelCount);
-      const avgG = Math.round(totalG / pixelCount);
-      const avgB = Math.round(totalB / pixelCount);
-      
-      return `rgb(${avgR}, ${avgG}, ${avgB})`;
-      
+      return `rgb(${r},${g},${b})`;
+
     } catch (error) {
       console.log('📍 Background sampling failed, using neutral background:', error.message);
-      // Return a neutral semi-transparent background that works on most images
-      return 'rgb(248, 248, 248)'; // Very light gray, works well with dark text
+      return 'rgb(248, 248, 248)';
     }
   }
 
-  // Improved contrast calculation for better text readability
   getContrastingTextColor(backgroundColor) {
     try {
-      // Extract RGB values from the background color
       const rgbMatch = backgroundColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-      if (!rgbMatch) {
-        console.log('⚠️ Could not parse background color, defaulting to black text');
-        return '#000000';
-      }
+      if (!rgbMatch) return '#000000';
       
-      const r = parseInt(rgbMatch[1]);
-      const g = parseInt(rgbMatch[2]);
-      const b = parseInt(rgbMatch[3]);
+      const [r, g, b] = [parseInt(rgbMatch[1]), parseInt(rgbMatch[2]), parseInt(rgbMatch[3])];
+      const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
       
-      // Calculate relative luminance using the standard formula
-      // Convert to linear RGB first
-      const linearR = r <= 10 ? r / 3294 : Math.pow((r / 269 + 0.0513), 2.4);
-      const linearG = g <= 10 ? g / 3294 : Math.pow((g / 269 + 0.0513), 2.4);
-      const linearB = b <= 10 ? b / 3294 : Math.pow((b / 269 + 0.0513), 2.4);
-      
-      // Calculate luminance
-      const luminance = 0.2126 * linearR + 0.7152 * linearG + 0.0722 * linearB;
-      
-      // Use a threshold of 0.5 for text color decision
-      // For better readability, we can be more conservative
-      const textColor = luminance > 0.4 ? '#000000' : '#FFFFFF';
-      
-      console.log(`🔤 Text color selection: luminance=${luminance.toFixed(3)} → ${textColor}`);
-      return textColor;
-      
+      return luminance > 0.5 ? '#000000' : '#FFFFFF';
     } catch (error) {
-      console.log('⚠️ Error calculating text contrast, defaulting to black:', error.message);
       return '#000000';
     }
   }
 
-  // Helper function to escape XML/SVG special characters
   escapeXml(text) {
     return text
       .replace(/&/g, '&amp;')

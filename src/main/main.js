@@ -2074,25 +2074,18 @@ class App {
         }
 
         const bounds = this.captureWindow.getBounds();
-        console.log('Lup capture initiated with bounds:', bounds);
-
-        // --- New Approach: Hide, screenshot, then show to avoid flicker ---
+        
+        // --- Hide, screenshot, then show to avoid flicker ---
         this.captureWindow.hide();
-        
-        // Allow the window to fully hide before capturing
         await new Promise(resolve => setTimeout(resolve, 60)); 
-        
         const screenshot = await this.screenshotService.captureFullScreenBackground();
-        
-        // Show the window again; the renderer already has the loading UI active.
         this.captureWindow.show();
-        // --- End of new approach ---
         
-        // Update loading text - step 2
+        // --- Show progress step 1: Extracting ---
         if (this.captureWindow && !this.captureWindow.isDestroyed()) {
           this.captureWindow.webContents.send('update-loading-step', 'Extracting text from image...');
         }
-
+        
         const imagePath = await this.screenshotService.captureAreaFromExisting(
           bounds, 
           screenshot.filePath
@@ -2100,13 +2093,24 @@ class App {
         
         const extractionResult = await this.visionService.extractText(imagePath);
         
-        // Update loading text - step 3
+        // --- Show progress step 2: Translating ---
         if (this.captureWindow && !this.captureWindow.isDestroyed()) {
           this.captureWindow.webContents.send('update-loading-step', 'Translating text...');
         }
-        
+
+        // --- Show progress step 3: Creating Image ---
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
+        }
+
         // Use the selected target language instead of auto-detection
         console.log(`Using selected target language: ${this.targetLanguage}`);
+        
+        // --- NEW: Add another loading step for image creation ---
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
+        }
+
         const translationResult = await this.screenshotService.createImageWithTranslation(
           imagePath, 
           extractionResult.fullText, 
