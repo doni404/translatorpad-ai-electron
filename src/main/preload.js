@@ -71,6 +71,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyAsImage: (imageDataUrl) => ipcRenderer.invoke('copy-as-image', imageDataUrl),
   copyAsText: (text) => ipcRenderer.invoke('copy-as-text', text),
 
+  // Drag operations
+  startImageDrag: (dragData) => ipcRenderer.invoke('start-image-drag', dragData),
+  endImageDrag: () => ipcRenderer.invoke('end-image-drag'),
+
   // History copy operations
   getOriginalImageForCopy: (imagePath) => ipcRenderer.invoke('get-original-image-for-copy', imagePath),
   getImageAsDataUrl: (imagePath) => ipcRenderer.invoke('get-image-as-data-url', imagePath),

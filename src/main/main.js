@@ -23,6 +23,7 @@ class App {
     this.captureGallery = []; // Store recent captures (max 5)
     this.maxGalleryItems = 5; // Limit gallery to 5 items
     this.shortcutsRecordingActive = false; // Flag to prevent shortcuts during recording
+    this.currentDragFilePath = null; // Track current drag temp file for cleanup
     
     this.init();
   }
@@ -477,7 +478,7 @@ class App {
             }
             .btn .tooltip {
                 visibility: hidden;
-                background-color: rgba(0,0,0,0.9);
+                background-color: rgba(0, 0, 0, 0.9);
                 color: #fff;
                 text-align: center;
                 border-radius: 4px;
@@ -904,7 +905,7 @@ class App {
                 height: 110px; /* Fixed height */
                 border-radius: 8px;
                 overflow: visible; /* CRITICAL: Allow buttons and tooltips to be visible */
-                cursor: pointer;
+                cursor: grab; /* Change cursor to indicate draggable */
                 transition: transform 0.2s ease;
                 background: rgba(255, 255, 255, 0.1);
                 backdrop-filter: blur(8px);
@@ -913,11 +914,43 @@ class App {
                 transform: translateY(20px);
                 animation: slideInUp 0.4s ease-out forwards;
                 flex-shrink: 0; /* Prevent items from shrinking */
+                /* Ensure consistent state */
+                pointer-events: auto;
             }
             
             .gallery-item:hover {
                 transform: scale(1.05);
                 border-color: rgba(255, 255, 255, 0.4);
+            }
+            
+            .gallery-item:active {
+                cursor: grabbing;
+            }
+            
+            .gallery-item.dragging {
+                opacity: 0.5;
+                transform: scale(0.95) rotate(5deg);
+                border-color: rgba(0, 123, 255, 0.6);
+                box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+                /* Override hover states when dragging */
+                pointer-events: none;
+            }
+            
+            /* Prevent hover effects when dragging */
+            .gallery-item.dragging:hover {
+                transform: scale(0.95) rotate(5deg); /* Keep drag transform */
+            }
+            
+            .gallery-item.dragging .gallery-overlay {
+                opacity: 0 !important;
+                visibility: hidden !important;
+                pointer-events: none !important;
+            }
+            
+            .gallery-item.dragging .close-btn {
+                opacity: 0 !important;
+                visibility: hidden !important;
+                pointer-events: none !important;
             }
             
             .gallery-item.entering {
@@ -955,6 +988,7 @@ class App {
                 height: 100%;
                 object-fit: cover; /* This is key for fitting any aspect ratio */
                 border-radius: 7px;
+                pointer-events: none; /* Prevent interference with drag events */
             }
             
             .gallery-overlay {
@@ -975,11 +1009,13 @@ class App {
                 opacity: 0;
                 visibility: hidden;
                 transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+                pointer-events: none; /* Don't interfere with drag events */
             }
             
             .gallery-item:hover .gallery-overlay {
                 opacity: 1;
                 visibility: visible;
+                pointer-events: auto; /* Re-enable when visible */
             }
             
             .gallery-actions-row {
@@ -1086,6 +1122,41 @@ class App {
                 color: white;
                 transform: scale(1.1);
             }
+            
+            /* Image type indicators - clickable gradient text toggle */
+            .image-type-indicator {
+                position: absolute;
+                top: 8px;
+                left: 8px;
+                font-size: 14px;
+                font-weight: 900;
+                cursor: pointer;
+                z-index: 15;
+                transition: all 0.2s ease;
+                text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+                user-select: none;
+                pointer-events: auto;
+            }
+            
+            .image-type-indicator.translated {
+                background: linear-gradient(135deg, #007bff, #0056b3);
+                background-clip: text;
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                text-shadow: none;
+            }
+            
+            .image-type-indicator.original {
+                background: linear-gradient(135deg, #ff9800, #e65100);
+                background-clip: text;
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                text-shadow: none;
+            }
+            
+            .image-type-indicator:hover {
+                transform: scale(1.2);
+            }
         </style>
     </head>
     <body>
@@ -1097,6 +1168,8 @@ class App {
             let captureData = [];
             let activeDropdown = null;
             let removingIndex = -1;
+            let isDragging = false;
+            let draggedItemElement = null; // Store a reliable reference to the item being dragged
 
             // Listen for new captures
             window.electronAPI.onGalleryUpdate && window.electronAPI.onGalleryUpdate((newCaptureData) => {
@@ -1107,7 +1180,13 @@ class App {
             function updateGallery() {
                 const container = document.getElementById('galleryContainer');
                 
-                // If we're not in the middle of a removal animation, clear and rebuild
+                // Clear any existing drag state when updating gallery
+                if (isDragging || draggedItemElement) {
+                    console.log('Clearing drag state during gallery update');
+                    isDragging = false;
+                    draggedItemElement = null;
+                }
+                
                 if (removingIndex === -1) {
                     container.innerHTML = '';
                     
@@ -1117,7 +1196,6 @@ class App {
                         container.appendChild(item);
                     });
                     
-                    // After rendering, calculate the required window height and send it to main
                     setTimeout(() => {
                         const requiredHeight = container.scrollHeight;
                         window.electronAPI.resizeGalleryWindow({ height: requiredHeight });
@@ -1129,38 +1207,253 @@ class App {
                 const item = document.createElement('div');
                 item.className = 'gallery-item';
                 item.setAttribute('data-index', index);
+                item.setAttribute('data-drag-listeners-attached', 'true'); // Mark as having listeners
+                item.draggable = true;
+                
+                const isTranslated = capture.translatedImageDataUrl && capture.translatedImageDataUrl !== capture.originalImageDataUrl;
+                const imageToShow = capture.translatedImageDataUrl || capture.originalImageDataUrl;
+                const indicatorClass = isTranslated ? 'translated' : 'original';
+                const indicatorText = isTranslated ? 'T' : 'O';
+                
                 item.innerHTML = \`
-                    <img class="gallery-image" src="\${capture.originalImageDataUrl}" alt="Capture \${index + 1}" />
-                    <button class="close-btn" onclick="removeItem(\${index}, event)" title="Remove"><i class="fas fa-times"></i></button>
+                    <img class="gallery-image" src="\${imageToShow}" alt="Capture \${index + 1}" />
+                    <div class="image-type-indicator \${indicatorClass}" data-showing="\${isTranslated ? 'translated' : 'original'}">\${indicatorText}</div>
+                    <button class="close-btn"><i class="fas fa-times"></i></button>
                     <div class="gallery-overlay">
                         <div class="gallery-actions-row">
-                             <button class="gallery-btn" onclick="copyItem(\${index}, 'originalImage')"><i class="fas fa-camera"></i><span class="tooltip tooltip-bottom">Original Img</span></button>
-                             <button class="gallery-btn" onclick="copyItem(\${index}, 'translatedImage')"><i class="fas fa-image"></i><span class="tooltip tooltip-bottom">Translated Img</span></button>
+                             <button class="gallery-btn copy-btn" data-copy-type="originalImage"><i class="fas fa-camera"></i><span class="tooltip tooltip-bottom">Original Img</span></button>
+                             <button class="gallery-btn copy-btn" data-copy-type="translatedImage"><i class="fas fa-image"></i><span class="tooltip tooltip-bottom">Translated Img</span></button>
                         </div>
                         <div class="gallery-actions-row">
-                             <button class="gallery-btn" onclick="copyItem(\${index}, 'originalText')"><i class="fas fa-file-alt"></i><span class="tooltip">Original Txt</span></button>
-                             <button class="gallery-btn" onclick="copyItem(\${index}, 'translatedText')"><i class="fas fa-language"></i><span class="tooltip">Translated Txt</span></button>
+                             <button class="gallery-btn copy-btn" data-copy-type="originalText"><i class="fas fa-file-alt"></i><span class="tooltip">Original Txt</span></button>
+                             <button class="gallery-btn copy-btn" data-copy-type="translatedText"><i class="fas fa-language"></i><span class="tooltip">Translated Txt</span></button>
                         </div>
                     </div>
                 \`;
+
+                // Add event listeners with proper error handling
+                const closeBtn = item.querySelector('.close-btn');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        removeItem(index, e);
+                    });
+                }
+
+                const indicator = item.querySelector('.image-type-indicator');
+                if (indicator) {
+                    indicator.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        toggleImageView(index, item);
+                    });
+                }
+
+                const copyButtons = item.querySelectorAll('.copy-btn');
+                copyButtons.forEach(button => {
+                    button.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        copyItem(index, button.dataset.copyType, button);
+                    });
+                });
+                
+                // Add drag event listeners with proper binding
+                item.addEventListener('dragstart', (e) => handleDragStart(e, index));
+                item.addEventListener('dragend', (e) => handleDragEnd(e));
+
+                // Prevent drag from starting on interactive elements.
+                const interactiveElements = item.querySelectorAll('button, .image-type-indicator');
+                interactiveElements.forEach(el => {
+                    el.addEventListener('mousedown', e => e.stopPropagation());
+                    // Ensure interactive elements are always enabled
+                    el.style.pointerEvents = 'auto';
+                    if (el.tagName === 'BUTTON') {
+                        el.disabled = false;
+                    }
+                });
+                
                 return item;
             }
+            
+            function toggleImageView(index, itemElement) {
+                const capture = captureData[index];
+                if (!capture || !capture.originalImageDataUrl || !capture.translatedImageDataUrl) return;
+                
+                const img = itemElement.querySelector('.gallery-image');
+                const indicator = itemElement.querySelector('.image-type-indicator');
+                const currentShowing = indicator.getAttribute('data-showing');
+                
+                if (currentShowing === 'translated') {
+                    img.src = capture.originalImageDataUrl;
+                    indicator.textContent = 'O';
+                    indicator.className = 'image-type-indicator original';
+                    indicator.setAttribute('data-showing', 'original');
+                } else {
+                    img.src = capture.translatedImageDataUrl;
+                    indicator.textContent = 'T';
+                    indicator.className = 'image-type-indicator translated';
+                    indicator.setAttribute('data-showing', 'translated');
+                }
+            }
 
-            async function copyItem(index, type) {
+            function handleDragStart(e, index) {
+                console.log('Drag start triggered for index:', index);
+                
+                // Prevent drag if already dragging or if no item element
+                if (isDragging || draggedItemElement) {
+                    console.log('Preventing drag - already in progress');
+                    e.preventDefault();
+                    return;
+                }
+                
+                // Validate that the target is actually draggable
+                const target = e.currentTarget;
+                if (!target || !target.draggable) {
+                    console.log('Preventing drag - target not draggable');
+                    e.preventDefault();
+                    return;
+                }
+                
+                isDragging = true;
+                draggedItemElement = target;
+                const capture = captureData[index];
+                
+                if (!capture) {
+                    console.log('No capture data found for index:', index);
+                    isDragging = false;
+                    draggedItemElement = null;
+                    e.preventDefault();
+                    return;
+                }
+                
+                console.log('Starting drag for capture:', capture.id);
+                
+                // Add visual feedback
+                draggedItemElement.classList.add('dragging');
+                
+                // Determine which image to drag
+                const indicator = draggedItemElement.querySelector('.image-type-indicator');
+                const currentShowing = indicator ? indicator.getAttribute('data-showing') : 'translated';
+                const currentImageDataUrl = currentShowing === 'translated' 
+                    ? (capture.translatedImageDataUrl || capture.originalImageDataUrl)
+                    : capture.originalImageDataUrl;
+                
+                // Set drag data
+                e.dataTransfer.setData('text/plain', 'TransPad AI Image');
+                e.dataTransfer.effectAllowed = 'copy';
+                
+                // Start the drag operation in the main process
+                window.electronAPI.startImageDrag({
+                    imageDataUrl: currentImageDataUrl
+                });
+                
+                console.log('Drag operation started successfully');
+            }
+            
+            function handleDragEnd(e) {
+                console.log('Drag end triggered');
+                
+                // Use the stored reference, as e.target can be unreliable.
+                const item = draggedItemElement;
+                if (!item) {
+                    console.log('No dragged item element found');
+                    return;
+                }
+
+                // Reset all state flags to prepare for the next operation.
+                isDragging = false;
+                draggedItemElement = null;
+
+                // Visually reset the item.
+                item.classList.remove('dragging');
+
+                // CRITICAL: Force a complete state reset
+                
+                // 1. Ensure the item is draggable again
+                item.draggable = true;
+                
+                // 2. Reset all CSS properties that might have been modified
+                item.style.opacity = '';
+                item.style.transform = '';
+                item.style.pointerEvents = '';
+                
+                // 3. Force reset overlay and close button visibility states
+                const overlay = item.querySelector('.gallery-overlay');
+                const closeBtn = item.querySelector('.close-btn');
+                const indicator = item.querySelector('.image-type-indicator');
+                const allButtons = item.querySelectorAll('button');
+                
+                if (overlay) {
+                    overlay.style.opacity = '';
+                    overlay.style.visibility = '';
+                    overlay.style.pointerEvents = '';
+                    overlay.removeAttribute('style');
+                }
+                
+                if (closeBtn) {
+                    closeBtn.style.opacity = '';
+                    closeBtn.style.visibility = '';
+                    closeBtn.style.pointerEvents = '';
+                    closeBtn.disabled = false;
+                    closeBtn.removeAttribute('style');
+                }
+                
+                if (indicator) {
+                    indicator.style.pointerEvents = '';
+                    indicator.style.opacity = '';
+                    indicator.style.transform = '';
+                    indicator.disabled = false;
+                }
+                
+                // 4. Reset all buttons to their default state
+                allButtons.forEach(button => {
+                    button.disabled = false;
+                    button.style.pointerEvents = '';
+                    button.style.opacity = '';
+                    button.style.visibility = '';
+                    button.style.background = '';
+                    button.style.transform = '';
+                    button.removeAttribute('style');
+                });
+                
+                // 5. Force a DOM reflow to ensure changes are applied
+                item.offsetHeight; // Reading this property forces a reflow
+                
+                // 6. Re-add event listeners if they were somehow lost
+                setTimeout(() => {
+                    // Check if drag events are still attached, if not, re-attach them
+                    if (!item.hasAttribute('data-drag-listeners-attached')) {
+                        const index = parseInt(item.getAttribute('data-index'));
+                        
+                        // Remove old listeners first
+                        item.removeEventListener('dragstart', handleDragStart);
+                        item.removeEventListener('dragend', handleDragEnd);
+                        
+                        // Re-attach drag listeners
+                        item.addEventListener('dragstart', (e) => handleDragStart(e, index));
+                        item.addEventListener('dragend', (e) => handleDragEnd(e));
+                        
+                        // Mark as having listeners attached
+                        item.setAttribute('data-drag-listeners-attached', 'true');
+                    }
+                    
+                    // Ensure all interactive elements are responsive
+                    const interactiveElements = item.querySelectorAll('button, .image-type-indicator');
+                    interactiveElements.forEach(el => {
+                        el.style.pointerEvents = 'auto';
+                        el.disabled = false;
+                    });
+                    
+                    console.log('Drag operation fully reset with event listener restoration');
+                }, 10);
+
+                // Notify the main process to clean up any temporary files.
+                window.electronAPI.endImageDrag();
+                console.log('Drag operation ended and item state was forcefully reset.');
+            }
+
+            async function copyItem(index, type, buttonElement) {
                 const capture = captureData[index];
                 if (!capture) return;
-                
-                // Find the button that was clicked to give feedback
-                const itemElement = document.querySelector(\`.gallery-item[data-index='\${index}']\`);
-                let clickedButton;
-
-                // This is a bit verbose but necessary to map type to the button
-                switch(type) {
-                    case 'originalImage': clickedButton = itemElement.querySelector('.fa-camera').parentElement; break;
-                    case 'translatedImage': clickedButton = itemElement.querySelector('.fa-image').parentElement; break;
-                    case 'originalText': clickedButton = itemElement.querySelector('.fa-file-alt').parentElement; break;
-                    case 'translatedText': clickedButton = itemElement.querySelector('.fa-language').parentElement; break;
-                }
 
                 try {
                     let success = false;
@@ -1190,18 +1483,14 @@ class App {
                             }
                             break;
                     }
-                    
-                    if (clickedButton && success) {
-                        showCopyFeedback(clickedButton, true);
-                    } else if (clickedButton) {
-                        showCopyFeedback(clickedButton, false);
+                    if (success) {
+                        showCopyFeedback(buttonElement, true);
+                    } else {
+                        showCopyFeedback(buttonElement, false);
                     }
-
                 } catch (error) {
                     console.error('Copy failed:', error);
-                    if (clickedButton) {
-                        showCopyFeedback(clickedButton, false);
-                    }
+                    showCopyFeedback(buttonElement, false);
                 }
             }
             
@@ -1232,30 +1521,13 @@ class App {
                 if (itemToRemove) {
                     itemToRemove.classList.add('exiting');
                     
-                    // Wait for animation, then just tell the main process to remove it.
-                    // The main process will send back a 'gallery-update' which will trigger a re-render.
                     setTimeout(() => {
                         window.electronAPI.removeFromGallery(index);
-                        removingIndex = -1; // Reset the animation lock
+                        removingIndex = -1;
                     }, 400);
                 }
             }
 
-            // Close dropdowns when clicking elsewhere
-            document.addEventListener('click', (e) => {
-                if (activeDropdown && !activeDropdown.contains(e.target)) {
-                    activeDropdown.classList.remove('show');
-                    activeDropdown.style.display = 'none';
-                    activeDropdown = null;
-                }
-            });
-            
-            // Prevent dropdown from closing when clicking inside it
-            document.addEventListener('click', (e) => {
-                if (e.target.closest('.copy-dropdown')) {
-                    e.stopPropagation();
-                }
-            });
         </script>
     </body>
     </html>`;
@@ -1263,7 +1535,6 @@ class App {
     this.miniGalleryWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(galleryHtml));
 
     this.miniGalleryWindow.once('ready-to-show', () => {
-      // Don't show automatically - let updateGalleryDisplay control visibility
       console.log('Mini gallery window ready but staying hidden until screenshots are added');
     });
 
@@ -2034,6 +2305,67 @@ class App {
     ipcMain.handle('set-shortcuts-recording', (event, isRecording) => {
       this.shortcutsRecordingActive = isRecording;
       console.log(`Shortcuts recording ${isRecording ? 'activated' : 'deactivated'}`);
+    });
+
+    // Image drag operations
+    ipcMain.handle('start-image-drag', async (event, dragData) => {
+      try {
+        const { imageDataUrl } = dragData;
+        
+        // Convert data URL to buffer
+        const base64Data = imageDataUrl.replace(/^data:image\/[a-z]+;base64,/, '');
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        
+        // Create temporary file for drag operation
+        const tempDir = path.join(app.getPath('userData'), 'temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        // Use TransPad-AI naming format with timestamp
+        const timestamp = Date.now();
+        const tempFilePath = path.join(tempDir, `TransPad-AI-${timestamp}.png`);
+        fs.writeFileSync(tempFilePath, imageBuffer);
+        
+        // Store the temp file path for cleanup
+        this.currentDragFilePath = tempFilePath;
+        
+        // Start the drag operation with the temporary file
+        event.sender.startDrag({
+          file: tempFilePath,
+          icon: nativeImage.createFromPath(tempFilePath).resize({ width: 64, height: 64 })
+        });
+        
+        console.log('Started drag operation with temp file:', tempFilePath);
+        return { success: true };
+      } catch (error) {
+        console.error('Error starting image drag:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('end-image-drag', async () => {
+      try {
+        // Clean up temporary drag file after a delay (user might still be dragging)
+        if (this.currentDragFilePath) {
+          setTimeout(() => {
+            try {
+              if (fs.existsSync(this.currentDragFilePath)) {
+                fs.unlinkSync(this.currentDragFilePath);
+                console.log('Cleaned up drag temp file:', this.currentDragFilePath);
+              }
+            } catch (error) {
+              console.warn('Failed to cleanup drag temp file:', error);
+            }
+            this.currentDragFilePath = null;
+          }, 2000); // 2 second delay to ensure drag operation is complete
+        }
+        
+        return { success: true };
+      } catch (error) {
+        console.error('Error ending image drag:', error);
+        return { success: false, error: error.message };
+      }
     });
   }
 
