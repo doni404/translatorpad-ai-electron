@@ -313,25 +313,10 @@ class App {
       return;
     }
     
-    // Get screen dimensions to calculate 60% size and center position
-    const { screen } = require('electron');
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
-    
-    // Calculate 60% of screen dimensions
-    const windowWidth = Math.round(screenWidth * 0.6);
-    const windowHeight = Math.round(screenHeight * 0.6);
-    
-    // Calculate center position
-    const x = Math.round((screenWidth - windowWidth) / 2);
-    const y = Math.round((screenHeight - windowHeight) / 2);
-    
     // Create the movable, resizable "Lup" window
     this.captureWindow = new BrowserWindow({
-      width: windowWidth,
-      height: windowHeight,
-      x: x,
-      y: y,
+      width: 500,
+      height: 400,
       transparent: true,
       frame: false,
       alwaysOnTop: true,
@@ -346,11 +331,7 @@ class App {
       }
     });
 
-    // Don't use center() since we've calculated the exact position
-    // this.captureWindow.center(); // Remove this line
-
-    // Remove this line as we're positioning manually
-    // this.captureWindow.center();
+    this.captureWindow.center();
 
     const lupHtml = `
     <!DOCTYPE html>
@@ -403,11 +384,15 @@ class App {
                 font-weight: 500;
             }
             #instruction-text {
-                color: rgba(255, 255, 255, 0.8);
-                font-size: 14px;
-                font-weight: 600;
-                text-shadow: 0 1px 3px rgba(0,0,0,0.4);
-                -webkit-app-region: no-drag; /* Make text non-draggable */
+                color: rgba(255, 255, 255, 0.95);
+                font-size: 12px;
+                font-weight: 500;
+                -webkit-app-region: no-drag;
+                background-color: rgba(0, 0, 0, 0.5);
+                padding: 5px 10px;
+                border-radius: 14px;
+                backdrop-filter: blur(5px);
+                border: 1px solid rgba(255,255,255,0.1);
             }
             #loading-container {
                 display: none;
@@ -431,16 +416,26 @@ class App {
                 100% { transform: rotate(360deg); }
             }
             .loading-text {
-                font-size: 14px;
-                font-weight: 600;
-                text-shadow: 0 1px 3px rgba(0,0,0,0.4);
+                font-size: 12px;
+                font-weight: 500;
                 text-align: center;
+                background-color: rgba(0, 0, 0, 0.5);
+                padding: 5px 10px;
+                border-radius: 14px;
+                backdrop-filter: blur(5px);
+                border: 1px solid rgba(255,255,255,0.1);
+                color: rgba(255, 255, 255, 0.95);
             }
             .loading-steps {
                 margin-top: 8px;
                 font-size: 12px;
-                color: rgba(255, 255, 255, 0.7);
+                color: rgba(255, 255, 255, 0.85);
                 text-align: center;
+                background-color: rgba(0, 0, 0, 0.5);
+                padding: 4px 10px;
+                border-radius: 14px;
+                backdrop-filter: blur(5px);
+                border: 1px solid rgba(255,255,255,0.1);
             }
             #result-container {
                  position: absolute;
@@ -591,7 +586,7 @@ class App {
             <div id="instruction-text">Press Enter to Capture & Translate</div>
             <div id="loading-container">
                 <div class="loading-spinner"></div>
-                <div class="loading-text">Processing your capture...</div>
+                <div class="loading-text">Processing Capture...</div>
                 <div class="loading-steps">Extracting text and translating</div>
             </div>
             <div id="result-container">
@@ -2081,29 +2076,18 @@ class App {
         const bounds = this.captureWindow.getBounds();
         console.log('Lup capture initiated with bounds:', bounds);
 
-        // --- New Approach: Keep window visible but make it transparent for screenshot ---
-        // First, store the current window properties
-        const originalOpacity = this.captureWindow.getOpacity();
+        // --- New Approach: Hide, screenshot, then show to avoid flicker ---
+        this.captureWindow.hide();
         
-        // Update loading text - step 1
-        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
-          this.captureWindow.webContents.send('update-loading-step', 'Capturing screenshot...');
-        }
+        // Allow the window to fully hide before capturing
+        await new Promise(resolve => setTimeout(resolve, 60)); 
         
-        // Make the window transparent for screenshot but keep it visible to user
-        this.captureWindow.setOpacity(0.01); // Almost transparent but still visible to OS
-        
-        // Small delay to ensure transparency is applied
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        // Get the screenshot with transparent window
         const screenshot = await this.screenshotService.captureFullScreenBackground();
         
-        // Immediately restore window opacity so user sees loading state
-        this.captureWindow.setOpacity(originalOpacity);
+        // Show the window again; the renderer already has the loading UI active.
+        this.captureWindow.show();
+        // --- End of new approach ---
         
-        // --- End Modified Section ---
-
         // Update loading text - step 2
         if (this.captureWindow && !this.captureWindow.isDestroyed()) {
           this.captureWindow.webContents.send('update-loading-step', 'Extracting text from image...');
