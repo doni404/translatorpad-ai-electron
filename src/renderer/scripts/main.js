@@ -155,6 +155,15 @@ function setupEventListeners() {
         });
     }
 
+    // Listen for loading events
+    window.electronAPI.onShowLoading(() => {
+        showLoading(true);
+    });
+    
+    window.electronAPI.onHideLoading(() => {
+        showLoading(false);
+    });
+
     // Plans page buttons
     const upgradeButtons = document.querySelectorAll('.plan-button.upgrade');
     if (upgradeButtons) {
@@ -735,11 +744,11 @@ function getLanguageName(code) {
 }
 
 function showLoading(show) {
-    const overlay = document.getElementById('loadingOverlay');
+    const loadingOverlay = document.getElementById('loadingOverlay');
     if (show) {
-        overlay.classList.add('active');
+        loadingOverlay.classList.add('active');
     } else {
-        overlay.classList.remove('active');
+        loadingOverlay.classList.remove('active');
     }
 }
 

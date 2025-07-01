@@ -52,10 +52,10 @@ class App {
 
   createMainWindow() {
     this.mainWindow = new BrowserWindow({
-      width: 1200,
-      height: 800,
-      minWidth: 800,
-      minHeight: 600,
+      width: 1000,
+      height: 700,
+      minWidth: 1000,
+      minHeight: 700,
       title: 'TransPad AI',
       titleBarStyle: 'default',
       movable: true,
@@ -2871,6 +2871,11 @@ class App {
         return;
       }
 
+      // Show loading overlay
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('show-loading');
+      }
+
       const originalImagePath = filePaths[0];
       console.log(`Image opened: ${originalImagePath}`);
       console.log(`[File Open] Using target language from main process: ${this.targetLanguage}`);
@@ -2930,6 +2935,11 @@ class App {
           success: false,
           error: `Failed to process image: ${error.message}`
         });
+      }
+    } finally {
+      // Hide loading overlay
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('hide-loading');
       }
     }
   }

@@ -148,5 +148,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('update-loading-step', (event, stepText) => {
       callback(stepText);
     });
+  },
+
+  // Loading overlay control
+  onShowLoading: (callback) => {
+    ipcRenderer.on('show-loading', () => callback());
+  },
+  
+  onHideLoading: (callback) => {
+    ipcRenderer.on('hide-loading', () => callback());
   }
 }); 
