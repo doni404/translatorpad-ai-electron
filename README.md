@@ -10,19 +10,19 @@ Below is a showcase of the TransPad AI interface and workflow.
 
 **Main Application Window**
 *The clean and modern interface, showing the translation history.*
-![Main application window of TransPad AI](assets/screenshots/main-app.png)
+![Main application window of TransPad AI](assets/screenshots/main-app-1.png)
 
 **Interactive Capture Window**
 *The "Lup" window allows you to precisely position and resize your capture area.*
-![The interactive 'Lup' capture window](assets/screenshots/lup-capture.png)
+![The interactive 'Lup' capture window](assets/screenshots/lup-capture-1.png)
 
 **Live Translation Result**
 *The translated text is displayed directly within the Lup after capture.*
-![The translated text result shown in the Lup window](assets/screenshots/lup-result.png)
+![The translated text result shown in the Lup window](assets/screenshots/lup-result-1.png)
 
 **Screenshot Gallery**
 *Your recent captures are always available in the persistent on-screen gallery.*
-![The screenshot gallery feature](assets/screenshots/screenhot-gallery.png)
+![The screenshot gallery feature](assets/screenshots/screenhot-gallery-1.png)
 
 ## Key Features
 
