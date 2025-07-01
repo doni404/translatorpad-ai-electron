@@ -4,22 +4,27 @@ const fs = require('fs');
 const { VisionService } = require('./services/visionService');
 const { TranslationService } = require('./services/translationService');
 const { ScreenshotService } = require('./services/screenshotService');
+const { StoreService } = require('./services/storeService');
 
 class App {
   constructor() {
     this.mainWindow = null;
     this.captureWindow = null;
     this.miniGalleryWindow = null; // New persistent gallery window
+    this.imageViewerWindow = null; // For the singleton viewer window
     this.visionService = new VisionService();
     this.translationService = new TranslationService();
+    this.storeService = new StoreService();
     this.screenshotService = new ScreenshotService(this.translationService);
     this.hasUsedCaptureSuccessfully = false;
     this.globalShortcutInProgress = false; // Prevent duplicate shortcut calls
     this.lastShortcutTime = 0; // Add cooldown tracking
     this.lastLupResult = null; // Store the last lup result for the "Open in App" feature
-    this.targetLanguage = 'en'; // Default target language: English
+    this.targetLanguage = this.storeService.getTargetLanguage(); // Load from store
     this.captureGallery = []; // Store recent captures (max 5)
     this.maxGalleryItems = 5; // Limit gallery to 5 items
+    this.shortcutsRecordingActive = false; // Flag to prevent shortcuts during recording
+    this.currentDragFilePath = null; // Track current drag temp file for cleanup
     
     this.init();
   }
@@ -47,10 +52,10 @@ class App {
 
   createMainWindow() {
     this.mainWindow = new BrowserWindow({
-      width: 1200,
-      height: 800,
-      minWidth: 800,
-      minHeight: 600,
+      width: 1000,
+      height: 700,
+      minWidth: 1000,
+      minHeight: 700,
       title: 'TransPad AI',
       titleBarStyle: 'default',
       movable: true,
@@ -86,6 +91,8 @@ class App {
   }
 
   createMenu() {
+    const shortcuts = this.storeService.getShortcuts();
+    
     const template = [
       {
         label: 'TransPad AI',
@@ -142,7 +149,7 @@ class App {
         submenu: [
           {
             label: 'Capture && Translate',
-            accelerator: 'CommandOrControl+Shift+S',
+            accelerator: shortcuts['capture-translate'],
             click: () => {
               if (this.mainWindow && !this.mainWindow.isDestroyed()) {
                 this.mainWindow.webContents.send('trigger-capture');
@@ -150,15 +157,15 @@ class App {
             }
           },
           {
-            label: 'Translate && Replace Clipboard',
-            accelerator: 'CommandOrControl+Shift+R',
+            label: 'Translate && Paste Clipboard',
+            accelerator: shortcuts['translate-paste'],
             click: async () => {
               await this.translateAndReplaceClipboard();
             }
           },
           {
             label: 'Copy Last Translation',
-            accelerator: 'CommandOrControl+Shift+V',
+            accelerator: shortcuts['copy-last-translation'],
             click: () => {
               if (this.lastLupResult && this.lastLupResult.translatedText) {
                 clipboard.writeText(this.lastLupResult.translatedText);
@@ -283,6 +290,9 @@ class App {
     this.targetLanguage = language;
     console.log(`Target language set to: ${language}`);
     
+    // Save to store
+    this.storeService.setTargetLanguage(language);
+    
     // Update the menu to reflect the new selection
     this.createMenu();
     
@@ -328,12 +338,14 @@ class App {
     <html>
     <head>
         <meta charset="UTF-8">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
             body {
                 background-color: transparent;
                 margin: 0;
                 font-family: -apple-system, BlinkMacSystemFont, sans-serif;
                 overflow: hidden;
+                cursor: grab; /* Change cursor to indicate movement */
             }
             html {
                 overflow: hidden;
@@ -343,14 +355,87 @@ class App {
                 top: 0; left: 0; right: 0; bottom: 0;
                 box-sizing: border-box;
                 border-radius: 12px;
-                -webkit-app-region: drag; /* Allows dragging the window */
+                -webkit-app-region: drag; /* The entire window is draggable again */
+                cursor: grab; /* Change cursor to indicate movement */
                 
-                /* Refined Black & White Glass Effect */
-                background: rgba(180, 180, 180, 0.2); /* Darker glass tint */
+                /* Visual style */
+                background: rgba(180, 180, 180, 0.2);
                 backdrop-filter: blur(12px);
-                border: 1px solid rgba(255, 255, 255, 0.75); /* Thinner inner white line */
-                box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.85), /* Larger, darker outer line */
-                            0 8px 35px rgba(0,0,0,0.3); /* Adjusted depth shadow */
+                border: 1px solid rgba(255, 255, 255, 0.75);
+                box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.85), 0 8px 35px rgba(0,0,0,0.3);
+                
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                flex-direction: column; /* Center content vertically */
+            }
+            #drag-handle {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 40px; /* Height of the drag area */
+                -webkit-app-region: drag; /* This part IS draggable */
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: rgba(255,255,255,0.4);
+                font-size: 13px;
+                font-weight: 500;
+            }
+            #instruction-text {
+                color: rgba(255, 255, 255, 0.95);
+                font-size: 12px;
+                font-weight: 500;
+                -webkit-app-region: no-drag;
+                background-color: rgba(0, 0, 0, 0.5);
+                padding: 5px 10px;
+                border-radius: 14px;
+                backdrop-filter: blur(5px);
+                border: 1px solid rgba(255,255,255,0.1);
+            }
+            #loading-container {
+                display: none;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                color: rgba(255, 255, 255, 0.9);
+                -webkit-app-region: no-drag;
+            }
+            .loading-spinner {
+                width: 40px;
+                height: 40px;
+                border: 3px solid rgba(255, 255, 255, 0.3);
+                border-top: 3px solid #ffffff;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 15px;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            .loading-text {
+                font-size: 12px;
+                font-weight: 500;
+                text-align: center;
+                background-color: rgba(0, 0, 0, 0.5);
+                padding: 5px 10px;
+                border-radius: 14px;
+                backdrop-filter: blur(5px);
+                border: 1px solid rgba(255,255,255,0.1);
+                color: rgba(255, 255, 255, 0.95);
+            }
+            .loading-steps {
+                margin-top: 8px;
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.85);
+                text-align: center;
+                background-color: rgba(0, 0, 0, 0.5);
+                padding: 4px 10px;
+                border-radius: 14px;
+                backdrop-filter: blur(5px);
+                border: 1px solid rgba(255,255,255,0.1);
             }
             #result-container {
                  position: absolute;
@@ -379,54 +464,100 @@ class App {
             }
             #controls {
                 position: absolute;
-                top: 15px;
+                bottom: 15px; /* Moved to bottom */
                 right: 15px;
                 display: flex;
                 gap: 8px;
                 -webkit-app-region: no-drag;
             }
             .btn {
-                background: rgba(0,0,0,0.5);
-                color: white;
+                background: rgba(0,0,0,0.4); /* Default visible background */
+                color: rgba(255, 255, 255, 0.8);
                 border: 1px solid rgba(255,255,255,0.1);
-                width: 40px;
-                height: 40px;
+                width: 32px;
+                height: 32px;
                 border-radius: 50%;
-                font-size: 18px;
+                font-size: 14px; /* Adjusted for icon consistency */
                 cursor: pointer;
                 display: flex;
                 justify-content: center;
                 align-items: center;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.2);
                 transition: all 0.2s ease;
+                position: relative; /* Needed for tooltip positioning */
             }
             .btn:hover {
-                background: rgba(0,0,0,0.7);
-                transform: scale(1.1);
+                background: rgba(0,0,0,0.6);
+                color: white;
+                transform: scale(1.05);
+            }
+            .btn .tooltip {
+                visibility: hidden;
+                background-color: rgba(0, 0, 0, 0.9);
+                color: #fff;
+                text-align: center;
+                border-radius: 4px;
+                padding: 4px 8px;
+                position: absolute;
+                z-index: 1;
+                bottom: calc(100% + 5px); /* Position 5px above button */
+                left: 50%;
+                transform: translateX(-50%); /* Modern centering */
+                opacity: 0;
+                transition: opacity 0.2s;
+                font-size: 11px;
+                font-weight: 600;
+                white-space: nowrap; /* Prevent wrapping */
+            }
+            .btn:hover .tooltip {
+                visibility: visible;
+                opacity: 1;
+            }
+            .tooltip.tooltip-bottom {
+                bottom: auto;
+                top: calc(100% + 5px);
+            }
+            #closeBtn {
+                position: absolute;
+                top: 12px;
+                right: 12px;
+                -webkit-app-region: no-drag;
             }
             
             /* Copy dropdown positioned outside the Lup */
             #copyDropdown {
                 position: absolute;
-                top: 70px;
+                bottom: 55px; /* Repositioned based on new controls */
                 right: 15px;
                 background: rgba(0,0,0,0.85);
                 backdrop-filter: blur(12px);
                 border: 1px solid rgba(255,255,255,0.2);
                 border-radius: 12px;
-                min-width: 160px;
+                min-width: 180px;
                 box-shadow: 0 4px 20px rgba(0,0,0,0.3);
                 display: none;
                 flex-direction: column;
-                overflow: hidden;
                 z-index: 1000;
                 -webkit-app-region: no-drag;
+                max-height: 95px; /* Force scrollbar on small windows */
+                overflow-y: auto; /* Allow scrolling if needed */
+            }
+            
+            #copyDropdown::-webkit-scrollbar {
+                width: 6px;
+            }
+            #copyDropdown::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            #copyDropdown::-webkit-scrollbar-thumb {
+                background-color: rgba(255,255,255,0.3);
+                border-radius: 6px;
             }
             
             .copy-option {
-                padding: 10px 14px;
+                padding: 8px 12px;
                 color: white;
-                font-size: 13px;
+                font-size: 12px; /* Smaller font */
                 font-weight: 500;
                 cursor: pointer;
                 transition: background 0.2s ease;
@@ -452,17 +583,24 @@ class App {
     <body>
         <div id="container">
             <div id="language-indicator">Any → English</div>
+            <div id="instruction-text">Press Enter to Capture & Translate</div>
+            <div id="loading-container">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">Processing Capture...</div>
+                <div class="loading-steps">Extracting text and translating</div>
+            </div>
             <div id="result-container">
                  <img id="resultImage" />
             </div>
         </div>
+
+        <!-- Controls are separate now -->
         <div id="controls">
-            <button id="captureBtn" class="btn" title="Capture & Translate">📸</button>
-            <button id="clearBtn" class="btn" title="Clear Translation" style="display: none;">🔄</button>
-            <button id="copyBtn" class="btn" title="Copy Result" style="display: none;">📋</button>
-            <button id="openInAppBtn" class="btn" title="Open in App" style="display: none;">↗️</button>
-            <button id="closeBtn" class="btn" title="Close Lup">❌</button>
+            <button id="clearBtn" class="btn" style="display: none;"><i class="fas fa-sync-alt"></i><span class="tooltip">Clear</span></button>
+            <button id="copyBtn" class="btn" style="display: none;"><i class="fas fa-copy"></i><span class="tooltip">Copy</span></button>
+            <button id="openInAppBtn" class="btn" style="display: none;"><i class="fas fa-arrow-up-right-from-square"></i><span class="tooltip">Go App</span></button>
         </div>
+        <button id="closeBtn" class="btn"><i class="fas fa-times"></i><span class="tooltip tooltip-bottom">Close</span></button>
         
         <!-- Copy dropdown positioned outside the Lup frame -->
         <div id="copyDropdown">
@@ -473,7 +611,7 @@ class App {
         </div>
 
         <script>
-            const captureBtn = document.getElementById('captureBtn');
+            const container = document.getElementById('container');
             const clearBtn = document.getElementById('clearBtn');
             const closeBtn = document.getElementById('closeBtn');
             const openInAppBtn = document.getElementById('openInAppBtn');
@@ -486,6 +624,8 @@ class App {
             const resultContainer = document.getElementById('result-container');
             const resultImage = document.getElementById('resultImage');
             const languageIndicator = document.getElementById('language-indicator');
+            const instructionText = document.getElementById('instruction-text');
+            const loadingContainer = document.getElementById('loading-container');
 
             // Store the current result data for copying
             let currentResult = null;
@@ -497,14 +637,34 @@ class App {
                 'id': 'Any → Indonesian'
             };
 
+            // Function to show loading state
+            function showLoading() {
+                instructionText.style.display = 'none';
+                loadingContainer.style.display = 'flex';
+                resultContainer.style.display = 'none';
+            }
+
+            // Function to hide loading state
+            function hideLoading() {
+                loadingContainer.style.display = 'none';
+            }
+
             // Update language indicator when target language changes
             window.electronAPI.onTargetLanguageChanged((language) => {
                 languageIndicator.textContent = languageLabels[language] || 'Any → English';
             });
 
-            captureBtn.addEventListener('click', () => {
-                captureBtn.style.display = 'none'; // Hide capture button
-                window.electronAPI.captureLupArea();
+            document.addEventListener('keydown', (e) => {
+                // Check for Enter key and that we are not already showing a result or loading
+                if (e.key === 'Enter' && resultContainer.style.display !== 'block' && loadingContainer.style.display !== 'flex') {
+                    showLoading(); // Show loading immediately
+                    window.electronAPI.captureLupArea();
+                }
+
+                // Also listen for ESC to close
+                if (e.key === 'Escape') {
+                    window.electronAPI.closeCaptureOverlay();
+                }
             });
 
             closeBtn.addEventListener('click', () => {
@@ -513,10 +673,11 @@ class App {
 
             clearBtn.addEventListener('click', () => {
                 resultContainer.style.display = 'none'; // Hide image
+                instructionText.style.display = 'block'; // Show instructions again
+                hideLoading(); // Make sure loading is hidden
                 clearBtn.style.display = 'none'; // Hide self
                 copyBtn.style.display = 'none'; // Hide copy button
                 openInAppBtn.style.display = 'none'; // Hide open in app button
-                captureBtn.style.display = 'flex'; // Show capture button again
                 copyDropdown.style.display = 'none'; // Hide dropdown
                 currentResult = null; // Clear result data
             });
@@ -602,15 +763,15 @@ class App {
             function showCopyFeedback(success, icon) {
                 if (success) {
                     copyBtn.style.background = 'rgba(34, 197, 94, 0.7)';
-                    copyBtn.textContent = '✅';
+                    copyBtn.innerHTML = '<i class="fas fa-check"></i>';
                 } else {
                     copyBtn.style.background = 'rgba(239, 68, 68, 0.7)';
-                    copyBtn.textContent = '❌';
+                    copyBtn.innerHTML = '<i class="fas fa-times"></i>';
                 }
                 
                 setTimeout(() => {
-                    copyBtn.style.background = 'rgba(0,0,0,0.5)';
-                    copyBtn.textContent = '📋';
+                    copyBtn.style.background = 'rgba(0,0,0,0.4)';
+                    copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
                 }, 1500);
             }
 
@@ -621,8 +782,10 @@ class App {
 
             // Listen for the translated image from main process
             window.electronAPI.onLupResult((imageDataUrl) => {
+                hideLoading(); // Hide loading first
                 resultImage.src = imageDataUrl;
                 resultContainer.style.display = 'block';
+                instructionText.style.display = 'none'; // Hide instructions on result
                 clearBtn.style.display = 'flex'; // Show clear button
                 copyBtn.style.display = 'flex'; // Show copy button
                 openInAppBtn.style.display = 'flex'; // Show open in app button
@@ -652,12 +815,15 @@ class App {
                 }
             });
 
-            // ESC key to cancel
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') {
-                    window.electronAPI.closeCaptureOverlay();
+            // Listen for loading step updates
+            window.electronAPI.onUpdateLoadingStep((stepText) => {
+                const loadingStepsElement = document.querySelector('.loading-steps');
+                if (loadingStepsElement) {
+                    loadingStepsElement.textContent = stepText;
                 }
             });
+
+            // ESC key to cancel (handled in the main keydown listener now)
         </script>
     </body>
     </html>`;
@@ -692,17 +858,17 @@ class App {
     // Get screen dimensions for positioning
     const { screen } = require('electron');
     const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
+    const { height: screenHeight } = primaryDisplay.workArea;
 
-    // Gallery dimensions
-    const galleryWidth = 400; // Much wider to accommodate dropdown without cropping
-    const galleryHeight = Math.min(500, screenHeight - 80); // Larger gallery
+    // Gallery dimensions - START SMALL, will be resized dynamically
+    const galleryWidth = 170; // Width for one item + padding
+    const galleryHeight = 50; // A small initial height
 
     this.miniGalleryWindow = new BrowserWindow({
       width: galleryWidth,
       height: galleryHeight,
       x: 15, // Add margin from left edge
-      y: screenHeight - galleryHeight, // Exactly at bottom
+      y: screenHeight - galleryHeight, // Start position, will be adjusted
       transparent: true,
       frame: false,
       alwaysOnTop: true,
@@ -725,6 +891,7 @@ class App {
     <html>
     <head>
         <meta charset="UTF-8">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
             body {
                 background-color: transparent;
@@ -732,41 +899,73 @@ class App {
                 padding: 0;
                 font-family: -apple-system, BlinkMacSystemFont, sans-serif;
                 overflow: hidden; /* Remove scroll capability */
+                pointer-events: none; /* Make body and all empty areas click-through */
             }
             
             .gallery-container {
                 display: flex;
                 flex-direction: column-reverse;
-                justify-content: flex-start;
+                justify-content: flex-start; /* Items will start from the bottom */
                 gap: 10px;
-                height: 100vh;
-                width: 100vw;
-                background: transparent;
+                /* Let the height be determined by content */
+                width: 100%;
                 padding: 12px;
-                padding-top: 0;
                 box-sizing: border-box;
-                overflow: hidden; /* Remove scroll capability */
+                pointer-events: auto; /* Allow hover events on the container and its children */
             }
             
             .gallery-item {
                 position: relative;
-                width: 110px;
-                height: 85px;
+                width: 140px; /* Fixed width */
+                height: 110px; /* Fixed height */
                 border-radius: 8px;
-                overflow: visible; /* Allow dropdown to extend outside item */
-                cursor: pointer;
-                transition: transform 0.2s ease; /* Shorter, simpler transition */
+                overflow: visible; /* CRITICAL: Allow buttons and tooltips to be visible */
+                cursor: grab; /* Change cursor to indicate draggable */
+                transition: transform 0.2s ease;
                 background: rgba(255, 255, 255, 0.1);
                 backdrop-filter: blur(8px);
                 border: 1px solid rgba(255, 255, 255, 0.2);
                 opacity: 0;
                 transform: translateY(20px);
                 animation: slideInUp 0.4s ease-out forwards;
+                flex-shrink: 0; /* Prevent items from shrinking */
+                /* Ensure consistent state */
+                pointer-events: auto;
             }
             
             .gallery-item:hover {
                 transform: scale(1.05);
                 border-color: rgba(255, 255, 255, 0.4);
+            }
+            
+            .gallery-item:active {
+                cursor: grabbing;
+            }
+            
+            .gallery-item.dragging {
+                opacity: 0.5;
+                transform: scale(0.95) rotate(5deg);
+                border-color: rgba(0, 123, 255, 0.6);
+                box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+                /* Override hover states when dragging */
+                pointer-events: none;
+            }
+            
+            /* Prevent hover effects when dragging */
+            .gallery-item.dragging:hover {
+                transform: scale(0.95) rotate(5deg); /* Keep drag transform */
+            }
+            
+            .gallery-item.dragging .gallery-overlay {
+                opacity: 0 !important;
+                visibility: hidden !important;
+                pointer-events: none !important;
+            }
+            
+            .gallery-item.dragging .close-btn {
+                opacity: 0 !important;
+                visibility: hidden !important;
+                pointer-events: none !important;
             }
             
             .gallery-item.entering {
@@ -802,8 +1001,9 @@ class App {
             .gallery-image {
                 width: 100%;
                 height: 100%;
-                object-fit: cover;
+                object-fit: cover; /* This is key for fitting any aspect ratio */
                 border-radius: 7px;
+                pointer-events: none; /* Prevent interference with drag events */
             }
             
             .gallery-overlay {
@@ -813,81 +1013,91 @@ class App {
                 right: 0;
                 bottom: 0;
                 background: rgba(0, 0, 0, 0.6);
-                display: none;
-                align-items: center;
+                display: flex; /* Use flex for layout but hide with opacity */
+                flex-direction: column;
                 justify-content: center;
+                align-items: center;
+                gap: 5px;
                 border-radius: 7px;
-                overflow: visible; /* Allow dropdown to extend outside */
+                overflow: visible; /* CRITICAL: Allow buttons and tooltips to be visible */
+                /* Transition properties for a smooth fade */
+                opacity: 0;
+                visibility: hidden;
+                transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+                pointer-events: none; /* Don't interfere with drag events */
             }
             
             .gallery-item:hover .gallery-overlay {
+                opacity: 1;
+                visibility: visible;
+                pointer-events: auto; /* Re-enable when visible */
+            }
+            
+            .gallery-actions-row {
                 display: flex;
+                gap: 5px;
             }
             
-            .copy-btn {
-                background: rgba(128, 128, 128, 0.9);
-                border: none;
-                border-radius: 16px;
-                padding: 6px 12px;
-                cursor: pointer;
+            .gallery-btn {
+                position: relative; /* For tooltip positioning */
+                background: rgba(0,0,0,0.5);
+                color: rgba(255, 255, 255, 0.9);
+                border: 1px solid rgba(255,255,255,0.1);
+                width: 28px;
+                height: 28px;
+                border-radius: 50%;
                 font-size: 12px;
-                font-weight: 600;
-                color: white;
-                transition: all 0.2s ease;
-                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                position: relative;
-            }
-            
-            .copy-btn:hover {
-                background: rgba(100, 100, 100, 1);
-                transform: scale(1.05);
-            }
-            
-            .copy-dropdown {
-                position: absolute; /* Use absolute positioning within the gallery window */
-                left: 125px; /* Position to the right of the gallery item */
-                top: 50%;
-                transform: translateY(-50%);
-                background: rgba(0, 0, 0, 0.9);
-                backdrop-filter: blur(12px);
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                border-radius: 8px;
-                min-width: 180px;
-                display: none;
-                flex-direction: column;
-                overflow: hidden;
-                z-index: 1000;
-                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-                pointer-events: auto;
-            }
-            
-            .copy-dropdown.show {
-                display: flex !important;
-            }
-            
-            .copy-option {
-                padding: 10px 14px;
-                color: white;
-                font-size: 12px;
-                font-weight: 500;
                 cursor: pointer;
-                transition: background 0.2s ease;
                 display: flex;
+                justify-content: center;
                 align-items: center;
-                gap: 8px;
-                border: none;
-                background: transparent;
-                text-align: left;
-                font-family: inherit;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+                transition: all 0.2s ease;
+            }
+            
+            .gallery-btn:hover {
+                background: rgba(0,0,0,0.7);
+                color: white;
+                transform: scale(1.1);
+                z-index: 20; /* Ensure tooltip appears on top */
+            }
+            
+            .gallery-btn .tooltip {
+                visibility: hidden;
+                background-color: rgba(0,0,0,0.95);
+                color: #fff;
+                text-align: center;
+                border-radius: 4px;
+                padding: 3px 6px;
+                position: absolute;
+                z-index: 100;
+                left: 50%;
+                transform: translateX(-50%);
+                opacity: 0;
+                transition: opacity 0.2s, visibility 0.2s;
+                font-size: 10px;
+                font-weight: 500;
                 white-space: nowrap;
+                pointer-events: none; /* Prevent tooltip from interfering with mouse */
             }
             
-            .copy-option:hover {
-                background: rgba(255, 255, 255, 0.15);
+            /* Default position: above the button */
+            .gallery-btn .tooltip {
+                bottom: 100%;
+                margin-bottom: 5px;
             }
-            
-            .copy-option:not(:last-child) {
-                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+
+            /* Modifier for tooltips below the button */
+            .gallery-btn .tooltip.tooltip-bottom {
+                top: 100%;
+                bottom: auto;
+                margin-bottom: 0;
+                margin-top: 5px;
+            }
+
+            .gallery-btn:hover .tooltip {
+                visibility: visible;
+                opacity: 1;
             }
             
             .gallery-item.empty {
@@ -898,29 +1108,69 @@ class App {
                 position: absolute;
                 top: 4px;
                 right: 4px;
-                background: rgba(255, 59, 48, 0.9);
-                border: none;
-                border-radius: 50%;
+                background: rgba(0,0,0,0.4);
+                color: rgba(255, 255, 255, 0.8);
+                border: 1px solid rgba(255,255,255,0.1);
                 width: 20px;
                 height: 20px;
+                border-radius: 50%;
+                font-size: 10px;
                 cursor: pointer;
-                font-size: 12px;
-                color: white;
-                display: none;
+                display: flex; /* Use flex for layout but hide with opacity */
                 align-items: center;
                 justify-content: center;
-                font-weight: bold;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.2);
                 transition: all 0.2s ease;
                 z-index: 10;
+                /* Transition properties for a smooth fade */
+                opacity: 0;
+                visibility: hidden;
             }
             
             .gallery-item:hover .close-btn {
-                display: flex;
+                opacity: 1;
+                visibility: visible;
             }
             
             .close-btn:hover {
-                background: rgba(255, 59, 48, 1);
+                background: rgba(0,0,0,0.6);
+                color: white;
                 transform: scale(1.1);
+            }
+            
+            /* Image type indicators - clickable gradient text toggle */
+            .image-type-indicator {
+                position: absolute;
+                top: 8px;
+                left: 8px;
+                font-size: 14px;
+                font-weight: 900;
+                cursor: pointer;
+                z-index: 15;
+                transition: all 0.2s ease;
+                text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+                user-select: none;
+                pointer-events: auto;
+            }
+            
+            .image-type-indicator.translated {
+                background: linear-gradient(135deg, #007bff, #0056b3);
+                background-clip: text;
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                text-shadow: none;
+            }
+            
+            .image-type-indicator.original {
+                background: linear-gradient(135deg, #ff9800, #e65100);
+                background-clip: text;
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                text-shadow: none;
+            }
+            
+            .image-type-indicator:hover {
+                transform: scale(1.2);
             }
         </style>
     </head>
@@ -933,6 +1183,8 @@ class App {
             let captureData = [];
             let activeDropdown = null;
             let removingIndex = -1;
+            let isDragging = false;
+            let draggedItemElement = null; // Store a reliable reference to the item being dragged
 
             // Listen for new captures
             window.electronAPI.onGalleryUpdate && window.electronAPI.onGalleryUpdate((newCaptureData) => {
@@ -943,18 +1195,26 @@ class App {
             function updateGallery() {
                 const container = document.getElementById('galleryContainer');
                 
-                // If we're not in the middle of a removal animation, clear and rebuild
+                // Clear any existing drag state when updating gallery
+                if (isDragging || draggedItemElement) {
+                    console.log('Clearing drag state during gallery update');
+                    isDragging = false;
+                    draggedItemElement = null;
+                }
+                
                 if (removingIndex === -1) {
                     container.innerHTML = '';
                     
-                    // Add items in normal order - flex-direction: column-reverse will handle positioning
-                    // Newest items will appear at bottom due to column-reverse
                     captureData.forEach((capture, index) => {
                         const item = createGalleryItem(capture, index);
-                        // Add entering animation for new items
                         item.classList.add('entering');
                         container.appendChild(item);
                     });
+                    
+                    setTimeout(() => {
+                        const requiredHeight = container.scrollHeight;
+                        window.electronAPI.resizeGalleryWindow({ height: requiredHeight });
+                    }, 50);
                 }
             }
 
@@ -962,152 +1222,364 @@ class App {
                 const item = document.createElement('div');
                 item.className = 'gallery-item';
                 item.setAttribute('data-index', index);
+                item.setAttribute('data-drag-listeners-attached', 'true'); // Mark as having listeners
+                item.draggable = true;
+                
+                const isTranslated = capture.translatedImageDataUrl && capture.translatedImageDataUrl !== capture.originalImageDataUrl;
+                const imageToShow = capture.translatedImageDataUrl || capture.originalImageDataUrl;
+                const indicatorClass = isTranslated ? 'translated' : 'original';
+                const indicatorText = isTranslated ? 'T' : 'O';
+                
                 item.innerHTML = \`
-                    <img class="gallery-image" src="\${capture.originalImageDataUrl}" alt="Capture \${index + 1}" />
-                    <button class="close-btn" onclick="removeItem(\${index}, event)" title="Remove">×</button>
+                    <img class="gallery-image" src="\${imageToShow}" alt="Capture \${index + 1}" />
+                    <div class="image-type-indicator \${indicatorClass}" data-showing="\${isTranslated ? 'translated' : 'original'}">\${indicatorText}</div>
+                    <button class="close-btn"><i class="fas fa-times"></i></button>
                     <div class="gallery-overlay">
-                        <button class="copy-btn" onclick="showCopyOptions(\${index}, event)">Copy</button>
-                    </div>
-                    <div class="copy-dropdown" id="dropdown\${index}">
-                        <button class="copy-option" onclick="copyItem(\${index}, 'originalImage')">
-                            📸 Original Image
-                        </button>
-                        <button class="copy-option" onclick="copyItem(\${index}, 'originalText')">
-                            📄 Original Text
-                        </button>
-                        <button class="copy-option" onclick="copyItem(\${index}, 'translatedImage')">
-                            🖼️ Translated Image
-                        </button>
-                        <button class="copy-option" onclick="copyItem(\${index}, 'translatedText')">
-                            📝 Translated Text
-                        </button>
+                        <div class="gallery-actions-row">
+                             <button class="gallery-btn copy-btn" data-copy-type="originalImage"><i class="fas fa-camera"></i><span class="tooltip tooltip-bottom">Original Img</span></button>
+                             <button class="gallery-btn copy-btn" data-copy-type="translatedImage"><i class="fas fa-image"></i><span class="tooltip tooltip-bottom">Translated Img</span></button>
+                        </div>
+                        <div class="gallery-actions-row">
+                             <button class="gallery-btn copy-btn" data-copy-type="originalText"><i class="fas fa-file-alt"></i><span class="tooltip">Original Txt</span></button>
+                             <button class="gallery-btn copy-btn" data-copy-type="translatedText"><i class="fas fa-language"></i><span class="tooltip">Translated Txt</span></button>
+                        </div>
                     </div>
                 \`;
+
+                // Add double-click event listener for enlarging
+                item.addEventListener('dblclick', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (!isDragging) {
+                        enlargeImage(index);
+                    }
+                });
+
+                // Add event listeners with proper error handling
+                const closeBtn = item.querySelector('.close-btn');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        removeItem(index, e);
+                    });
+                }
+
+                const indicator = item.querySelector('.image-type-indicator');
+                if (indicator) {
+                    indicator.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        toggleImageView(index, item);
+                    });
+                }
+
+                const copyButtons = item.querySelectorAll('.copy-btn');
+                copyButtons.forEach(button => {
+                    button.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        copyItem(index, button.dataset.copyType, button);
+                    });
+                });
+                
+                // Add drag event listeners with proper binding
+                item.addEventListener('dragstart', (e) => handleDragStart(e, index));
+                item.addEventListener('dragend', (e) => handleDragEnd(e));
+
+                // Prevent drag from starting on interactive elements.
+                const interactiveElements = item.querySelectorAll('button, .image-type-indicator');
+                interactiveElements.forEach(el => {
+                    el.addEventListener('mousedown', e => e.stopPropagation());
+                    // Ensure interactive elements are always enabled
+                    el.style.pointerEvents = 'auto';
+                    if (el.tagName === 'BUTTON') {
+                        el.disabled = false;
+                    }
+                });
+                
                 return item;
             }
-
-            function showCopyOptions(index, event) {
-                event.stopPropagation();
-                console.log('showCopyOptions called with index:', index);
-                
-                // Close any active dropdown
-                if (activeDropdown) {
-                    activeDropdown.classList.remove('show');
-                    activeDropdown.style.display = 'none';
-                    activeDropdown = null;
-                }
-                
-                const dropdown = document.getElementById(\`dropdown\${index}\`);
-                console.log('Found dropdown:', dropdown);
-                if (dropdown) {
-                    // Simple show - CSS positioning will handle placement
-                    dropdown.style.display = 'flex';
-                    dropdown.classList.add('show');
-                    activeDropdown = dropdown;
-                    
-                    console.log('Dropdown shown for index:', index);
-                    
-                    // Auto-close after 5 seconds
-                    setTimeout(() => {
-                        if (activeDropdown === dropdown) {
-                            dropdown.classList.remove('show');
-                            dropdown.style.display = 'none';
-                            activeDropdown = null;
-                        }
-                    }, 5000);
-                } else {
-                    console.error('Dropdown not found for index:', index);
-                }
-            }
-
-            async function copyItem(index, type) {
+            
+            function enlargeImage(index) {
                 const capture = captureData[index];
                 if (!capture) return;
                 
-                if (activeDropdown) {
-                    activeDropdown.classList.remove('show');
-                    activeDropdown.style.display = 'none';
-                    activeDropdown = null;
+                // Get the current showing image (translated or original based on the indicator)
+                const galleryItem = document.querySelector(\`[data-index="\${index}"]\`);
+                const indicator = galleryItem ? galleryItem.querySelector('.image-type-indicator') : null;
+                const currentShowing = indicator ? indicator.getAttribute('data-showing') : 'translated';
+                
+                const imageToShow = currentShowing === 'translated' 
+                    ? (capture.translatedImageDataUrl || capture.originalImageDataUrl)
+                    : capture.originalImageDataUrl;
+                
+                // Send request to main process to create new window
+                window.electronAPI.openImageInNewWindow({
+                    imageDataUrl: imageToShow,
+                    capture: capture,
+                    currentShowing: currentShowing
+                });
+            }
+
+            function closeModal() {
+                // Remove this function as we're no longer using modals
+            }
+
+            // Remove modal event listeners
+            // No longer needed as we're using separate windows
+            
+            function toggleImageView(index, itemElement) {
+                const capture = captureData[index];
+                if (!capture || !capture.originalImageDataUrl || !capture.translatedImageDataUrl) return;
+                
+                const img = itemElement.querySelector('.gallery-image');
+                const indicator = itemElement.querySelector('.image-type-indicator');
+                const currentShowing = indicator.getAttribute('data-showing');
+                
+                if (currentShowing === 'translated') {
+                    img.src = capture.originalImageDataUrl;
+                    indicator.textContent = 'O';
+                    indicator.className = 'image-type-indicator original';
+                    indicator.setAttribute('data-showing', 'original');
+                } else {
+                    img.src = capture.translatedImageDataUrl;
+                    indicator.textContent = 'T';
+                    indicator.className = 'image-type-indicator translated';
+                    indicator.setAttribute('data-showing', 'translated');
+                }
+            }
+
+            function handleDragStart(e, index) {
+                console.log('Drag start triggered for index:', index);
+                
+                // Prevent drag if already dragging or if no item element
+                if (isDragging || draggedItemElement) {
+                    console.log('Preventing drag - already in progress');
+                    e.preventDefault();
+                    return;
                 }
                 
+                // Validate that the target is actually draggable
+                const target = e.currentTarget;
+                if (!target || !target.draggable) {
+                    console.log('Preventing drag - target not draggable');
+                    e.preventDefault();
+                    return;
+                }
+                
+                isDragging = true;
+                draggedItemElement = target;
+                const capture = captureData[index];
+                
+                if (!capture) {
+                    console.log('No capture data found for index:', index);
+                    isDragging = false;
+                    draggedItemElement = null;
+                    e.preventDefault();
+                    return;
+                }
+                
+                console.log('Starting drag for capture:', capture.id);
+                
+                // Add visual feedback
+                draggedItemElement.classList.add('dragging');
+                
+                // Determine which image to drag
+                const indicator = draggedItemElement.querySelector('.image-type-indicator');
+                const currentShowing = indicator ? indicator.getAttribute('data-showing') : 'translated';
+                const currentImageDataUrl = currentShowing === 'translated' 
+                    ? (capture.translatedImageDataUrl || capture.originalImageDataUrl)
+                    : capture.originalImageDataUrl;
+                
+                // Set drag data
+                e.dataTransfer.setData('text/plain', 'TransPad AI Image');
+                e.dataTransfer.effectAllowed = 'copy';
+                
+                // Start the drag operation in the main process
+                window.electronAPI.startImageDrag({
+                    imageDataUrl: currentImageDataUrl
+                });
+                
+                console.log('Drag operation started successfully');
+            }
+            
+            function handleDragEnd(e) {
+                console.log('Drag end triggered');
+                
+                // Use the stored reference, as e.target can be unreliable.
+                const item = draggedItemElement;
+                if (!item) {
+                    console.log('No dragged item element found');
+                    return;
+                }
+
+                // Reset all state flags to prepare for the next operation.
+                isDragging = false;
+                draggedItemElement = null;
+
+                // Visually reset the item.
+                item.classList.remove('dragging');
+
+                // CRITICAL: Force a complete state reset
+                
+                // 1. Ensure the item is draggable again
+                item.draggable = true;
+                
+                // 2. Reset all CSS properties that might have been modified
+                item.style.opacity = '';
+                item.style.transform = '';
+                item.style.pointerEvents = '';
+                
+                // 3. Force reset overlay and close button visibility states
+                const overlay = item.querySelector('.gallery-overlay');
+                const closeBtn = item.querySelector('.close-btn');
+                const indicator = item.querySelector('.image-type-indicator');
+                const allButtons = item.querySelectorAll('button');
+                
+                if (overlay) {
+                    overlay.style.opacity = '';
+                    overlay.style.visibility = '';
+                    overlay.style.pointerEvents = '';
+                    overlay.removeAttribute('style');
+                }
+                
+                if (closeBtn) {
+                    closeBtn.style.opacity = '';
+                    closeBtn.style.visibility = '';
+                    closeBtn.style.pointerEvents = '';
+                    closeBtn.disabled = false;
+                    closeBtn.removeAttribute('style');
+                }
+                
+                if (indicator) {
+                    indicator.style.pointerEvents = '';
+                    indicator.style.opacity = '';
+                    indicator.style.transform = '';
+                    indicator.disabled = false;
+                }
+                
+                // 4. Reset all buttons to their default state
+                allButtons.forEach(button => {
+                    button.disabled = false;
+                    button.style.pointerEvents = '';
+                    button.style.opacity = '';
+                    button.style.visibility = '';
+                    button.style.background = '';
+                    button.style.transform = '';
+                    button.removeAttribute('style');
+                });
+                
+                // 5. Force a DOM reflow to ensure changes are applied
+                item.offsetHeight; // Reading this property forces a reflow
+                
+                // 6. Re-add event listeners if they were somehow lost
+                setTimeout(() => {
+                    // Check if drag events are still attached, if not, re-attach them
+                    if (!item.hasAttribute('data-drag-listeners-attached')) {
+                        const index = parseInt(item.getAttribute('data-index'));
+                        
+                        // Remove old listeners first
+                        item.removeEventListener('dragstart', handleDragStart);
+                        item.removeEventListener('dragend', handleDragEnd);
+                        
+                        // Re-attach drag listeners
+                        item.addEventListener('dragstart', (e) => handleDragStart(e, index));
+                        item.addEventListener('dragend', (e) => handleDragEnd(e));
+                        
+                        // Mark as having listeners attached
+                        item.setAttribute('data-drag-listeners-attached', 'true');
+                    }
+                    
+                    // Ensure all interactive elements are responsive
+                    const interactiveElements = item.querySelectorAll('button, .image-type-indicator');
+                    interactiveElements.forEach(el => {
+                        el.style.pointerEvents = 'auto';
+                        el.disabled = false;
+                    });
+                    
+                    console.log('Drag operation fully reset with event listener restoration');
+                }, 10);
+
+                // Notify the main process to clean up any temporary files.
+                window.electronAPI.endImageDrag();
+                console.log('Drag operation ended and item state was forcefully reset.');
+            }
+
+            async function copyItem(index, type, buttonElement) {
+                const capture = captureData[index];
+                if (!capture) return;
+
                 try {
+                    let success = false;
                     switch (type) {
                         case 'originalImage':
                             if (capture.originalImageDataUrl) {
                                 await window.electronAPI.copyAsImage(capture.originalImageDataUrl);
+                                success = true;
                             }
                             break;
                         case 'originalText':
                             if (capture.originalText) {
                                 await window.electronAPI.copyAsText(capture.originalText);
+                                success = true;
                             }
                             break;
                         case 'translatedImage':
                             if (capture.translatedImageDataUrl) {
                                 await window.electronAPI.copyAsImage(capture.translatedImageDataUrl);
+                                success = true;
                             }
                             break;
                         case 'translatedText':
                             if (capture.translatedText) {
                                 await window.electronAPI.copyAsText(capture.translatedText);
+                                success = true;
                             }
                             break;
                     }
+                    if (success) {
+                        showCopyFeedback(buttonElement, true);
+                    } else {
+                        showCopyFeedback(buttonElement, false);
+                    }
                 } catch (error) {
                     console.error('Copy failed:', error);
+                    showCopyFeedback(buttonElement, false);
                 }
+            }
+            
+            function showCopyFeedback(button, success) {
+                const originalIcon = button.innerHTML;
+                if (success) {
+                    button.innerHTML = '<i class="fas fa-check"></i>';
+                    button.style.background = 'rgba(34, 197, 94, 0.7)';
+                } else {
+                    button.innerHTML = '<i class="fas fa-times"></i>';
+                    button.style.background = 'rgba(239, 68, 68, 0.7)';
+                }
+                
+                setTimeout(() => {
+                    button.innerHTML = originalIcon;
+                    button.style.background = 'rgba(0,0,0,0.5)';
+                }, 1500);
             }
 
             function removeItem(index, event) {
                 event.stopPropagation();
-                
-                // Close any active dropdown
-                if (activeDropdown) {
-                    activeDropdown.classList.remove('show');
-                    activeDropdown.style.display = 'none';
-                    activeDropdown = null;
-                }
-                
                 removingIndex = index;
                 
-                // Find the item being removed
                 const container = document.getElementById('galleryContainer');
                 const allItems = Array.from(container.children);
                 const itemToRemove = allItems.find(item => parseInt(item.getAttribute('data-index')) === index);
                 
                 if (itemToRemove) {
-                    // Add exit animation to the item being removed
                     itemToRemove.classList.add('exiting');
                     
-                    // Wait for exit animation to complete, then remove and rebuild
                     setTimeout(() => {
-                        // Remove the item from data and notify main process
-                        captureData.splice(index, 1);
-                        window.electronAPI.removeFromGallery && window.electronAPI.removeFromGallery(index);
-                        
-                        // Reset and rebuild immediately with smooth animations
+                        window.electronAPI.removeFromGallery(index);
                         removingIndex = -1;
-                        updateGallery(); // This will rebuild with correct indices and smooth animations
-                        
-                    }, 400); // Match the slideOutDown animation duration
+                    }, 400);
                 }
             }
 
-            // Close dropdowns when clicking elsewhere
-            document.addEventListener('click', (e) => {
-                if (activeDropdown && !activeDropdown.contains(e.target)) {
-                    activeDropdown.classList.remove('show');
-                    activeDropdown.style.display = 'none';
-                    activeDropdown = null;
-                }
-            });
-            
-            // Prevent dropdown from closing when clicking inside it
-            document.addEventListener('click', (e) => {
-                if (e.target.closest('.copy-dropdown')) {
-                    e.stopPropagation();
-                }
-            });
         </script>
     </body>
     </html>`;
@@ -1115,7 +1587,6 @@ class App {
     this.miniGalleryWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(galleryHtml));
 
     this.miniGalleryWindow.once('ready-to-show', () => {
-      // Don't show automatically - let updateGalleryDisplay control visibility
       console.log('Mini gallery window ready but staying hidden until screenshots are added');
     });
 
@@ -1124,6 +1595,133 @@ class App {
     });
 
     console.log('Mini gallery window created (hidden)');
+  }
+
+  createImageViewerWindow(imageData) {
+    // --- SINGLETON LOGIC ---
+    if (this.imageViewerWindow && !this.imageViewerWindow.isDestroyed()) {
+      console.log('Image viewer already open, updating image...');
+      this.imageViewerWindow.webContents.send('update-image', imageData);
+      this.imageViewerWindow.focus();
+      return;
+    }
+
+    // --- WINDOW CREATION (if not already open) ---
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
+    
+    const windowWidth = Math.round(screenWidth * 0.6);
+    const windowHeight = Math.round(screenHeight * 0.6);
+    
+    const x = Math.round((screenWidth - windowWidth) / 2);
+    const y = Math.round((screenHeight - windowHeight) / 2);
+
+    this.imageViewerWindow = new BrowserWindow({
+      width: windowWidth,
+      height: windowHeight,
+      x: x,
+      y: y,
+      title: 'TransPad AI - Image Viewer',
+      transparent: true,
+      frame: false,
+      alwaysOnTop: false,
+      skipTaskbar: false,
+      resizable: true,
+      movable: true,
+      hasShadow: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.js')
+      },
+      icon: path.join(__dirname, '../../assets/icons/transpad_512x512.png')
+    });
+
+    const viewerHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <style>
+            body { background-color: transparent; margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; overflow: hidden; }
+            #container { position: absolute; top: 0; left: 0; right: 0; bottom: 0; border-radius: 12px; background: rgba(30, 30, 30, 0.75); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 20px 60px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+            .header { height: 50px; flex-shrink: 0; display: flex; align-items: center; padding: 0 15px; -webkit-app-region: drag; }
+            .content { flex-grow: 1; display: flex; justify-content: center; align-items: center; padding: 0 20px 20px 20px; -webkit-app-region: no-drag; overflow: hidden; }
+            .viewer-image { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
+            .title { color: rgba(255,255,255,0.7); font-weight: 600; font-size: 14px; margin: 0 auto; }
+            .btn { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); border: none; width: 32px; height: 32px; border-radius: 50%; font-size: 14px; cursor: pointer; display: flex; justify-content: center; align-items: center; transition: all 0.2s ease; -webkit-app-region: no-drag; position: absolute; }
+            #closeBtn { top: 9px; left: 15px; }
+            #closeBtn:hover { background: rgba(239, 68, 68, 0.8); color: white; }
+            #toggleBtn { top: 9px; right: 15px; width: auto; padding: 0 12px; border-radius: 16px; font-size: 12px; font-weight: 500; }
+            #toggleBtn:hover { background: rgba(255,255,255,0.2); }
+        </style>
+    </head>
+    <body>
+        <div id="container">
+            <div class="header">
+                <button id="closeBtn" class="btn"><i class="fas fa-times"></i></button>
+                <span class="title">Image Viewer</span>
+                <button id="toggleBtn" class="btn" style="${imageData.capture.originalImageDataUrl === imageData.capture.translatedImageDataUrl ? 'display: none;' : ''}">
+                    Switch to ${imageData.currentShowing === 'translated' ? 'Original' : 'Translated'}
+                </button>
+            </div>
+            <div class="content">
+                <img class="viewer-image" id="viewerImage" src="${imageData.imageDataUrl}" alt="Screenshot">
+            </div>
+        </div>
+
+        <script>
+            let currentShowing, captureData;
+            const viewerImage = document.getElementById('viewerImage');
+            const toggleBtn = document.getElementById('toggleBtn');
+            const closeBtn = document.getElementById('closeBtn');
+
+            function updateContent(data) {
+                currentShowing = data.currentShowing;
+                captureData = data.capture;
+                viewerImage.src = data.imageDataUrl;
+                toggleBtn.textContent = \`Switch to \${currentShowing === 'translated' ? 'Original' : 'Translated'}\`;
+                toggleBtn.style.display = captureData.originalImageDataUrl === captureData.translatedImageDataUrl ? 'none' : 'block';
+            }
+
+            toggleBtn.addEventListener('click', () => {
+                if (currentShowing === 'translated') {
+                    viewerImage.src = captureData.originalImageDataUrl;
+                    toggleBtn.textContent = 'Switch to Translated';
+                    currentShowing = 'original';
+                } else {
+                    viewerImage.src = captureData.translatedImageDataUrl;
+                    toggleBtn.textContent = 'Switch to Original';
+                    currentShowing = 'translated';
+                }
+            });
+
+            closeBtn.addEventListener('click', () => window.close());
+            document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+            
+            // Listen for updates to replace the image
+            window.electronAPI.onUpdateImage((newImageData) => {
+                updateContent(newImageData);
+            });
+            
+            // Initial load
+            updateContent(${JSON.stringify(imageData)});
+        </script>
+    </body>
+    </html>`;
+
+    this.imageViewerWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(viewerHtml));
+
+    this.imageViewerWindow.once('ready-to-show', () => {
+      this.imageViewerWindow.show();
+      this.imageViewerWindow.focus();
+    });
+
+    this.imageViewerWindow.on('closed', () => {
+      this.imageViewerWindow = null;
+    });
   }
 
   addCaptureToGallery(captureData, translationResult) {
@@ -1178,10 +1776,14 @@ class App {
     // Create gallery window if it doesn't exist
     if (!this.miniGalleryWindow) {
       this.createMiniGallery();
+      // IMPORTANT: Wait for the gallery to be fully ready before sending the first update
+      this.miniGalleryWindow.once('ready-to-show', () => {
+        this.updateGalleryDisplay();
+      });
+    } else {
+        // If it already exists, update it right away
+        this.updateGalleryDisplay();
     }
-
-    // Update the gallery display
-    this.updateGalleryDisplay();
   }
 
   updateGalleryDisplay() {
@@ -1191,11 +1793,10 @@ class App {
         if (!this.miniGalleryWindow.isVisible()) {
           this.miniGalleryWindow.show();
         }
-        // Make window interactive when there are screenshots
-        this.miniGalleryWindow.setIgnoreMouseEvents(false);
+        // Let the renderer calculate its own size, just send the data
         this.miniGalleryWindow.webContents.send('gallery-update', this.captureGallery);
       } else {
-        // Hide window when no screenshots to avoid blocking
+        // Hide window when no screenshots
         if (this.miniGalleryWindow.isVisible()) {
           this.miniGalleryWindow.hide();
         }
@@ -1204,162 +1805,192 @@ class App {
   }
 
   registerShortcuts() {
-    globalShortcut.register('CommandOrControl+Shift+S', async () => {
-      const now = Date.now();
-      
-      // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
-      if (now - this.lastShortcutTime < 2000) {
-        console.log('Global shortcut on cooldown, ignoring');
-        return;
-      }
-      
-      // CRITICAL: Prevent duplicate shortcut executions
-      if (this.globalShortcutInProgress) {
-        console.log('Global shortcut in progress, ignoring');
-        return;
-      }
-      
-      // ADDITIONAL PROTECTION: Check if capture window already exists
-      if (this.captureWindow) {
-        console.log('Capture window exists, ignoring shortcut');
-        return;
-      }
-      
-      this.globalShortcutInProgress = true;
-      this.lastShortcutTime = now;
-      console.log('Global shortcut activated');
-      
-      console.log('Global shortcut pressed - starting smart capture sequence...');
-      
-      try {
-        // Check permissions silently first
-        const hasPermission = await this.checkScreenPermissions(false);
-        if (!hasPermission) {
-          console.log('Screen recording permission needed, showing permission dialog...');
-          // Now show the dialog since permission is actually needed
-          const dialogResult = await this.checkScreenPermissions(true);
-          if (!dialogResult) {
-            this.globalShortcutInProgress = false;
-            this.lastShortcutTime = 0;
+    // Unregister all shortcuts before registering new ones to prevent conflicts
+    globalShortcut.unregisterAll();
+    
+    const shortcuts = this.storeService.getShortcuts();
+    
+    // Register capture & translate shortcut
+    try {
+      if (shortcuts['capture-translate'] && shortcuts['capture-translate'].trim()) {
+        globalShortcut.register(shortcuts['capture-translate'], async () => {
+          // Prevent execution if shortcuts are being recorded
+          if (this.shortcutsRecordingActive) {
+            console.log('Shortcuts recording active, ignoring global shortcut');
             return;
           }
           
-          // If permission was "not-determined", we need to trigger the system dialog
-          const initialStatus = systemPreferences.getMediaAccessStatus('screen');
-          if (initialStatus === 'not-determined') {
-            console.log('Triggering system permission dialog...');
+          const now = Date.now();
+          
+          // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
+          if (now - this.lastShortcutTime < 2000) {
+            console.log('Global shortcut on cooldown, ignoring');
+            return;
+          }
+          
+          // CRITICAL: Prevent duplicate shortcut executions
+          if (this.globalShortcutInProgress) {
+            console.log('Global shortcut in progress, ignoring');
+            return;
+          }
+          
+          // ADDITIONAL PROTECTION: Check if capture window already exists
+          if (this.captureWindow) {
+            console.log('Capture window exists, ignoring shortcut');
+            return;
+          }
+          
+          this.globalShortcutInProgress = true;
+          this.lastShortcutTime = now;
+          console.log('Global shortcut activated');
+          
+          console.log('Global shortcut pressed - starting smart capture sequence...');
+          
+          try {
+            // Check permissions silently first
+            const hasPermission = await this.checkScreenPermissions(false);
+            if (!hasPermission) {
+              console.log('Screen recording permission needed, showing permission dialog...');
+              // Now show the dialog since permission is actually needed
+              const dialogResult = await this.checkScreenPermissions(true);
+              if (!dialogResult) {
+                this.globalShortcutInProgress = false;
+                this.lastShortcutTime = 0;
+                return;
+              }
+              
+              // If permission was "not-determined", we need to trigger the system dialog
+              const initialStatus = systemPreferences.getMediaAccessStatus('screen');
+              if (initialStatus === 'not-determined') {
+                console.log('Triggering system permission dialog...');
+                
+                // Ensure main window is visible to show toast messages
+                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                  this.mainWindow.show();
+                  this.mainWindow.focus();
+                }
+                
+                // Take a quick screenshot to trigger the system permission dialog
+                try {
+                  await this.screenshotService.captureFullScreen();
+                } catch (error) {
+                  console.log('Screenshot attempt triggered permission dialog (expected)');
+                }
+                
+                // Wait for user to grant permission
+                const permissionGranted = await this.waitForScreenPermission();
+                if (!permissionGranted) {
+                  console.log('Permission denied via global shortcut');
+                  // Keep main window visible on permission denial
+                  if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                    this.mainWindow.show();
+                    this.mainWindow.focus();
+                  }
+                  this.globalShortcutInProgress = false;
+                  this.lastShortcutTime = 0;
+                  return;
+                }
+                
+                // IMPORTANT: Permission was just granted, so we need to verify it's actually working
+                // Wait a moment for the system to fully apply the permission
+                console.log('Permission granted, verifying...');
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Double-check permission status
+                const finalStatus = systemPreferences.getMediaAccessStatus('screen');
+                if (finalStatus !== 'granted') {
+                  console.log('Permission verification failed:', finalStatus);
+                  // Keep main window visible on permission issue
+                  if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                    this.mainWindow.show();
+                    this.mainWindow.focus();
+                  }
+                  this.globalShortcutInProgress = false;
+                  this.lastShortcutTime = 0;
+                  return;
+                }
+              }
+            }
             
-            // Ensure main window is visible to show toast messages
+            console.log('Permission check passed, proceeding with capture...');
+            
+            // NEW STRATEGY: Use system APIs to properly handle window switching
+            
+            // Step 1: Get the current frontmost app before we interfere
+            const frontmostApp = await this.getFrontmostApplication();
+            console.log('Frontmost app detected:', frontmostApp);
+            
+            // Step 2: Hide TransPad AI completely (not just minimize)
+            if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+              this.mainWindow.hide();
+            }
+            
+            // Step 3: If the frontmost app wasn't TransPad AI, try to restore it
+            if (frontmostApp && frontmostApp !== 'TransPad AI' && frontmostApp !== 'Electron') {
+              console.log(`Attempting to restore ${frontmostApp}...`);
+              await this.restoreFrontmostApp(frontmostApp);
+              
+              // Wait for the app to redraw
+              await new Promise(resolve => setTimeout(resolve, 500));
+            } else {
+              // If TransPad AI was frontmost, just wait for desktop
+              console.log('TransPad AI was frontmost, waiting for desktop...');
+              await new Promise(resolve => setTimeout(resolve, 300));
+            }
+            
+            // Step 4: Take screenshot
+            console.log('Taking screenshot of current state...');
+            const preCapture = await this.screenshotService.captureFullScreenBackground();
+            this.preCaptureScreenshot = preCapture;
+            console.log('Pre-capture completed, creating overlay...');
+            
+            // Step 5: Show overlay for selection - with additional check
+            if (!this.captureWindow) {
+              await this.startScreenCaptureWithoutPreCapture();
+            } else {
+              console.log('❌ Capture window created during process, skipping overlay creation');
+            }
+            
+            // Mark that we've used capture successfully (for future runs)
+            this.hasUsedCaptureSuccessfully = true;
+            
+            // DO NOT reset flag here - wait for actual capture completion or cancellation
+            
+          } catch (error) {
+            console.error('Error in smart capture sequence:', error);
+            // On error, restore the main window
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
               this.mainWindow.show();
               this.mainWindow.focus();
             }
-            
-            // Take a quick screenshot to trigger the system permission dialog
-            try {
-              await this.screenshotService.captureFullScreen();
-            } catch (error) {
-              console.log('Screenshot attempt triggered permission dialog (expected)');
-            }
-            
-            // Wait for user to grant permission
-            const permissionGranted = await this.waitForScreenPermission();
-            if (!permissionGranted) {
-              console.log('Permission denied via global shortcut');
-              // Keep main window visible on permission denial
-              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                this.mainWindow.show();
-                this.mainWindow.focus();
-              }
-              this.globalShortcutInProgress = false;
-              this.lastShortcutTime = 0;
-              return;
-            }
-            
-            // IMPORTANT: Permission was just granted, so we need to verify it's actually working
-            // Wait a moment for the system to fully apply the permission
-            console.log('Permission granted, verifying...');
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-            // Double-check permission status
-            const finalStatus = systemPreferences.getMediaAccessStatus('screen');
-            if (finalStatus !== 'granted') {
-              console.log('Permission verification failed:', finalStatus);
-              // Keep main window visible on permission issue
-              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                this.mainWindow.show();
-                this.mainWindow.focus();
-              }
-              this.globalShortcutInProgress = false;
-              this.lastShortcutTime = 0;
-              return;
-            }
+            // Reset flag on error
+            this.globalShortcutInProgress = false;
+            this.lastShortcutTime = 0;
+            console.log('Global shortcut error, flag reset');
           }
-        }
-        
-        console.log('Permission check passed, proceeding with capture...');
-        
-        // NEW STRATEGY: Use system APIs to properly handle window switching
-        
-        // Step 1: Get the current frontmost app before we interfere
-        const frontmostApp = await this.getFrontmostApplication();
-        console.log('Frontmost app detected:', frontmostApp);
-        
-        // Step 2: Hide TransPad AI completely (not just minimize)
-        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.hide();
-        }
-        
-        // Step 3: If the frontmost app wasn't TransPad AI, try to restore it
-        if (frontmostApp && frontmostApp !== 'TransPad AI' && frontmostApp !== 'Electron') {
-          console.log(`Attempting to restore ${frontmostApp}...`);
-          await this.restoreFrontmostApp(frontmostApp);
-          
-          // Wait for the app to redraw
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } else {
-          // If TransPad AI was frontmost, just wait for desktop
-          console.log('TransPad AI was frontmost, waiting for desktop...');
-          await new Promise(resolve => setTimeout(resolve, 300));
-        }
-        
-        // Step 4: Take screenshot
-        console.log('Taking screenshot of current state...');
-        const preCapture = await this.screenshotService.captureFullScreenBackground();
-        this.preCaptureScreenshot = preCapture;
-        console.log('Pre-capture completed, creating overlay...');
-        
-        // Step 5: Show overlay for selection - with additional check
-        if (!this.captureWindow) {
-          await this.startScreenCaptureWithoutPreCapture();
-        } else {
-          console.log('❌ Capture window created during process, skipping overlay creation');
-        }
-        
-        // Mark that we've used capture successfully (for future runs)
-        this.hasUsedCaptureSuccessfully = true;
-        
-        // DO NOT reset flag here - wait for actual capture completion or cancellation
-        
-      } catch (error) {
-        console.error('Error in smart capture sequence:', error);
-        // On error, restore the main window
-        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.show();
-          this.mainWindow.focus();
-        }
-        // Reset flag on error
-        this.globalShortcutInProgress = false;
-        this.lastShortcutTime = 0;
-        console.log('Global shortcut error, flag reset');
+        });
       }
-    });
+    } catch (error) {
+      console.error('Error registering shortcuts:', error);
+    }
 
     // Register global shortcut for clipboard translation
-    globalShortcut.register('CommandOrControl+Shift+R', async () => {
-      console.log('Global "Translate & Replace Clipboard" shortcut activated.');
-      await this.translateAndReplaceClipboard();
-    });
+    try {
+      if (shortcuts['translate-paste'] && shortcuts['translate-paste'].trim()) {
+        globalShortcut.register(shortcuts['translate-paste'], async () => {
+          // Prevent execution if shortcuts are being recorded
+          if (this.shortcutsRecordingActive) {
+            console.log('Shortcuts recording active, ignoring global shortcut');
+            return;
+          }
+          
+          console.log('Global "Translate & Paste Clipboard" shortcut activated.');
+          await this.translateAndReplaceClipboard();
+        });
+      }
+    } catch (error) {
+      console.error('Error registering translate-paste shortcut:', error);
+    }
   }
 
   setupIpcHandlers() {
@@ -1443,15 +2074,18 @@ class App {
         }
 
         const bounds = this.captureWindow.getBounds();
-        console.log('Lup capture initiated with bounds:', bounds);
-
-        // --- Just-In-Time Screenshot ---
+        
+        // --- Hide, screenshot, then show to avoid flicker ---
         this.captureWindow.hide();
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 60)); 
         const screenshot = await this.screenshotService.captureFullScreenBackground();
         this.captureWindow.show();
-        // --- End Just-In-Time Screenshot ---
-
+        
+        // --- Show progress step 1: Extracting ---
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Extracting text from image...');
+        }
+        
         const imagePath = await this.screenshotService.captureAreaFromExisting(
           bounds, 
           screenshot.filePath
@@ -1459,8 +2093,24 @@ class App {
         
         const extractionResult = await this.visionService.extractText(imagePath);
         
+        // --- Show progress step 2: Translating ---
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Translating text...');
+        }
+
+        // --- Show progress step 3: Creating Image ---
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
+        }
+
         // Use the selected target language instead of auto-detection
         console.log(`Using selected target language: ${this.targetLanguage}`);
+        
+        // --- NEW: Add another loading step for image creation ---
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
+        }
+
         const translationResult = await this.screenshotService.createImageWithTranslation(
           imagePath, 
           extractionResult.fullText, 
@@ -1517,6 +2167,12 @@ class App {
 
       } catch (error) {
         console.error('Error during lup capture process:', error);
+        
+        // Ensure window opacity is restored even if there's an error
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.setOpacity(1.0);
+        }
+        
         if (this.captureWindow) {
           this.captureWindow.close();
         }
@@ -1723,12 +2379,32 @@ class App {
     });
 
     // Gallery operations
+    ipcMain.handle('resize-gallery-window', (event, { height }) => {
+        if (this.miniGalleryWindow && !this.miniGalleryWindow.isDestroyed()) {
+            const { screen } = require('electron');
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const { height: screenHeight } = primaryDisplay.workArea;
+            
+            const currentBounds = this.miniGalleryWindow.getBounds();
+            const newHeight = Math.max(0, height); // Ensure height is not negative
+
+            // Animate is smoother on macOS this way
+            this.miniGalleryWindow.setBounds({
+                x: currentBounds.x,
+                y: screenHeight - newHeight, // Reposition based on new height
+                width: currentBounds.width, // Width stays constant
+                height: newHeight
+            }, true); // Animate the change
+        }
+    });
+    
     ipcMain.handle('remove-from-gallery', async (event, index) => {
       try {
         if (index >= 0 && index < this.captureGallery.length) {
           this.captureGallery.splice(index, 1);
+          // After removing, send the updated gallery back to the renderer
           this.updateGalleryDisplay();
-          console.log(`Removed gallery item at index ${index}`);
+          console.log(`Removed gallery item at index ${index}, updated gallery sent.`);
         }
         return { success: true };
       } catch (error) {
@@ -1751,6 +2427,129 @@ class App {
         icon: image // Force the icon here
       });
       return result;
+    });
+
+    ipcMain.handle('get-app-version', () => {
+      return app.getVersion();
+    });
+
+    // Shortcut Management
+    ipcMain.handle('get-shortcuts', () => {
+      return this.storeService.getShortcuts();
+    });
+
+    ipcMain.handle('set-shortcuts', (event, shortcuts) => {
+      // Validate shortcuts before saving
+      const validShortcuts = {};
+      for (const [key, shortcut] of Object.entries(shortcuts)) {
+        if (shortcut && typeof shortcut === 'string' && shortcut.trim().length > 0) {
+          // Basic validation: must contain at least one letter/number after modifiers
+          if (/[a-zA-Z0-9]/.test(shortcut)) {
+            validShortcuts[key] = shortcut.trim();
+          } else {
+            console.warn(`Invalid shortcut for ${key}: ${shortcut}`);
+          }
+        }
+      }
+      
+      this.storeService.setShortcuts(validShortcuts);
+      this.registerShortcuts(); // Re-register with the new settings
+      this.createMenu(); // Rebuild menu to show updated shortcuts
+    });
+
+    ipcMain.handle('reset-shortcuts', () => {
+      const shortcuts = this.storeService.resetShortcuts();
+      this.registerShortcuts();
+      this.createMenu(); // Rebuild menu to show updated shortcuts
+      return shortcuts;
+    });
+
+    // Language Management
+    ipcMain.handle('get-target-language', () => {
+      return this.storeService.getTargetLanguage();
+    });
+
+    ipcMain.handle('set-target-language', (event, language) => {
+      this.setTargetLanguage(language);
+    });
+
+    // Shortcuts Recording Control
+    ipcMain.handle('set-shortcuts-recording', (event, isRecording) => {
+      this.shortcutsRecordingActive = isRecording;
+      console.log(`Shortcuts recording ${isRecording ? 'activated' : 'deactivated'}`);
+    });
+
+    // Image drag operations
+    ipcMain.handle('start-image-drag', async (event, dragData) => {
+      try {
+        const { imageDataUrl } = dragData;
+        
+        // Convert data URL to buffer
+        const base64Data = imageDataUrl.replace(/^data:image\/[a-z]+;base64,/, '');
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        
+        // Create temporary file for drag operation
+        const tempDir = path.join(app.getPath('userData'), 'temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        // Use TransPad-AI naming format with timestamp
+        const timestamp = Date.now();
+        const tempFilePath = path.join(tempDir, `TransPad-AI-${timestamp}.png`);
+        fs.writeFileSync(tempFilePath, imageBuffer);
+        
+        // Store the temp file path for cleanup
+        this.currentDragFilePath = tempFilePath;
+        
+        // Start the drag operation with the temporary file
+        event.sender.startDrag({
+          file: tempFilePath,
+          icon: nativeImage.createFromPath(tempFilePath).resize({ width: 64, height: 64 })
+        });
+        
+        console.log('Started drag operation with temp file:', tempFilePath);
+        return { success: true };
+      } catch (error) {
+        console.error('Error starting image drag:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('end-image-drag', async () => {
+      try {
+        // Clean up temporary drag file after a delay (user might still be dragging)
+        if (this.currentDragFilePath) {
+          setTimeout(() => {
+            try {
+              if (fs.existsSync(this.currentDragFilePath)) {
+                fs.unlinkSync(this.currentDragFilePath);
+                console.log('Cleaned up drag temp file:', this.currentDragFilePath);
+              }
+            } catch (error) {
+              console.warn('Failed to cleanup drag temp file:', error);
+            }
+            this.currentDragFilePath = null;
+          }, 2000); // 2 second delay to ensure drag operation is complete
+        }
+        
+        return { success: true };
+      } catch (error) {
+        console.error('Error ending image drag:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    // Image viewer window operations
+    ipcMain.handle('open-image-in-new-window', async (event, imageData) => {
+      try {
+        console.log('Creating new image viewer window');
+        this.createImageViewerWindow(imageData);
+        return { success: true };
+      } catch (error) {
+        console.error('Error creating image viewer window:', error);
+        return { success: false, error: error.message };
+      }
     });
   }
 
@@ -2072,6 +2871,11 @@ class App {
         return;
       }
 
+      // Show loading overlay
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('show-loading');
+      }
+
       const originalImagePath = filePaths[0];
       console.log(`Image opened: ${originalImagePath}`);
       console.log(`[File Open] Using target language from main process: ${this.targetLanguage}`);
@@ -2132,6 +2936,11 @@ class App {
           error: `Failed to process image: ${error.message}`
         });
       }
+    } finally {
+      // Hide loading overlay
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('hide-loading');
+      }
     }
   }
 
@@ -2150,15 +2959,41 @@ class App {
         return;
       }
 
-      console.log(`Translating and replacing clipboard: "${text.substring(0, 30)}..."`);
+      console.log(`Translating and pasting clipboard: "${text.substring(0, 30)}..."`);
 
       const translatedText = await this.translationService.translateText(text, this.targetLanguage);
       if (!translatedText) {
         throw new Error('Translation service failed to return a result.');
       }
 
-      // Replace clipboard content
+      // Temporarily hide our app to focus the previous one
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.hide();
+      }
+
+      // Put the translated text on the clipboard
       clipboard.writeText(translatedText);
+      
+      // Give the OS a moment to switch focus
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Use AppleScript to simulate a paste command
+      const { exec } = require('child_process');
+      const script = `osascript -e 'tell application "System Events" to keystroke "v" using command down'`;
+      exec(script, (error) => {
+        if (error) {
+          console.error('Failed to execute paste command:', error);
+          // If pasting fails, at least the text is on the clipboard.
+          // Show the window again so the user isn't confused.
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.show();
+          }
+        } else {
+          console.log('Paste command executed successfully.');
+          // Optionally, briefly show and re-hide the window to show the notification,
+          // or just let it stay hidden. For now, we'll keep it hidden.
+        }
+      });
 
       // Store this as the last result so it can be copied
       this.lastLupResult = {
@@ -2185,7 +3020,7 @@ class App {
       console.log(`Clipboard replacement successful.`);
 
     } catch (error) {
-      console.error('Error translating and replacing clipboard:', error);
+      console.error('Error translating and pasting clipboard:', error);
       if (Notification.isSupported()) {
         new Notification({
           title: 'Translation Failed',

@@ -9,10 +9,24 @@ let currentResultData = null; // Store data for re-translation
 document.addEventListener('DOMContentLoaded', async () => {
     await loadSupportedLanguages();
     await checkGoogleCloudStatus();
+    await updateAppVersion();
     loadHistory();
     setupEventListeners();
     showSection('home');
 });
+
+// Update app version in UI
+async function updateAppVersion() {
+    try {
+        const version = await window.electronAPI.getAppVersion();
+        const versionElements = document.querySelectorAll('.app-version');
+        versionElements.forEach(el => {
+            el.textContent = `Version ${version}`;
+        });
+    } catch (error) {
+        console.error('Failed to get app version:', error);
+    }
+}
 
 // Setup event listeners
 function setupEventListeners() {
@@ -141,6 +155,15 @@ function setupEventListeners() {
         });
     }
 
+    // Listen for loading events
+    window.electronAPI.onShowLoading(() => {
+        showLoading(true);
+    });
+    
+    window.electronAPI.onHideLoading(() => {
+        showLoading(false);
+    });
+
     // Plans page buttons
     const upgradeButtons = document.querySelectorAll('.plan-button.upgrade');
     if (upgradeButtons) {
@@ -244,6 +267,206 @@ function setupEventListeners() {
             closeModal();
         }
     });
+
+    // Setup shortcuts management
+    setupShortcutsPage();
+}
+
+// Setup shortcuts management page
+async function setupShortcutsPage() {
+    const shortcutInputs = {
+        'capture-translate': document.getElementById('capture-translate'),
+        'translate-paste': document.getElementById('translate-paste'),
+        'copy-last-translation': document.getElementById('copy-last-translation')
+    };
+    const resetButton = document.getElementById('reset-shortcuts-button');
+
+    let currentShortcuts = {};
+    let activeInput = null;
+
+    // Load current shortcuts
+    try {
+        currentShortcuts = await window.electronAPI.getShortcuts();
+        updateShortcutDisplay();
+    } catch (error) {
+        console.error('Failed to load shortcuts:', error);
+    }
+
+    function updateShortcutDisplay() {
+        Object.entries(shortcutInputs).forEach(([key, input]) => {
+            if (input && currentShortcuts[key]) {
+                input.value = formatShortcutForDisplay(currentShortcuts[key]);
+            }
+        });
+    }
+
+    function formatShortcutForDisplay(shortcut) {
+        return shortcut
+            .replace(/CommandOrControl/g, '⌘')
+            .replace(/Shift/g, '⇧')
+            .replace(/Alt/g, '⌥')
+            .replace(/Control/g, '⌃')
+            .replace(/\+/g, ' + ');
+    }
+
+    function formatShortcutForStorage(keys) {
+        const modifiers = [];
+        const regularKeys = [];
+
+        keys.forEach(key => {
+            if (key === 'Meta' || key === 'cmd') {
+                modifiers.push('CommandOrControl');
+            } else if (key === 'Shift') {
+                modifiers.push('Shift');
+            } else if (key === 'Alt') {
+                modifiers.push('Alt');
+            } else if (key === 'Control') {
+                modifiers.push('Control');
+            } else if (key.length === 1 && /[a-zA-Z0-9]/.test(key)) {
+                regularKeys.push(key.toUpperCase());
+            } else if (key.startsWith('Key')) {
+                regularKeys.push(key.substring(3));
+            } else if (key.startsWith('Digit')) {
+                regularKeys.push(key.substring(5));
+            } else if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
+                regularKeys.push(key.replace('Arrow', ''));
+            } else if (['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'].includes(key)) {
+                regularKeys.push(key);
+            } else if (['Space', 'Tab', 'Enter', 'Escape', 'Backspace', 'Delete'].includes(key)) {
+                regularKeys.push(key);
+            } else if (key.length === 1) {
+                // Handle other single character keys
+                regularKeys.push(key.toUpperCase());
+            }
+        });
+
+        // Must have at least one regular key
+        if (regularKeys.length === 0) {
+            return null; // Invalid shortcut
+        }
+
+        // Remove duplicates while preserving order
+        const uniqueModifiers = [...new Set(modifiers)];
+        const uniqueRegularKeys = [...new Set(regularKeys)];
+
+        // Standard order: CommandOrControl, Alt, Shift, then regular keys
+        const orderedModifiers = [];
+        if (uniqueModifiers.includes('CommandOrControl')) orderedModifiers.push('CommandOrControl');
+        if (uniqueModifiers.includes('Alt')) orderedModifiers.push('Alt');
+        if (uniqueModifiers.includes('Shift')) orderedModifiers.push('Shift');
+        if (uniqueModifiers.includes('Control')) orderedModifiers.push('Control');
+
+        return [...orderedModifiers, ...uniqueRegularKeys].join('+');
+    }
+
+    // Add event listeners for shortcut inputs
+    Object.entries(shortcutInputs).forEach(([key, input]) => {
+        if (input) {
+            input.addEventListener('click', () => {
+                startRecording(key, input);
+            });
+
+            input.addEventListener('focus', () => {
+                startRecording(key, input);
+            });
+        }
+    });
+
+    function startRecording(key, input) {
+        if (activeInput) {
+            stopRecording();
+        }
+
+        activeInput = input;
+        input.classList.add('recording');
+        input.value = 'Press keys...';
+        input.placeholder = 'Recording...';
+
+        // Tell the main process to disable global shortcuts
+        window.electronAPI.setShortcutsRecording(true);
+
+        const recordedKeys = new Set();
+
+        const keyDownHandler = (e) => {
+            e.preventDefault();
+            recordedKeys.add(e.key);
+            input.value = Array.from(recordedKeys).join(' + ');
+        };
+
+        const keyUpHandler = (e) => {
+            e.preventDefault();
+            
+            if (recordedKeys.size > 0) {
+                const shortcut = formatShortcutForStorage(Array.from(recordedKeys));
+                if (shortcut && shortcut.length > 0) {
+                    currentShortcuts[key] = shortcut;
+                    input.value = formatShortcutForDisplay(shortcut);
+                    saveShortcuts();
+                } else {
+                    // Invalid shortcut - show error message
+                    input.value = 'Invalid shortcut - try again';
+                    input.style.color = '#e53e3e';
+                    setTimeout(() => {
+                        input.value = currentShortcuts[key] ? formatShortcutForDisplay(currentShortcuts[key]) : '';
+                        input.style.color = '';
+                    }, 2000);
+                }
+            }
+            
+            stopRecording();
+        };
+
+        function stopRecording() {
+            if (activeInput) {
+                activeInput.classList.remove('recording');
+                activeInput.removeEventListener('keydown', keyDownHandler);
+                activeInput.removeEventListener('keyup', keyUpHandler);
+                activeInput = null;
+                
+                // Tell the main process to re-enable global shortcuts
+                window.electronAPI.setShortcutsRecording(false);
+            }
+        }
+
+        input.addEventListener('keydown', keyDownHandler);
+        input.addEventListener('keyup', keyUpHandler);
+        
+        // Stop recording if clicked outside
+        const clickHandler = (e) => {
+            if (!input.contains(e.target)) {
+                stopRecording();
+                document.removeEventListener('click', clickHandler);
+            }
+        };
+        
+        setTimeout(() => {
+            document.addEventListener('click', clickHandler);
+        }, 100);
+    }
+
+    async function saveShortcuts() {
+        try {
+            await window.electronAPI.setShortcuts(currentShortcuts);
+            showSuccess('Shortcuts updated successfully!');
+        } catch (error) {
+            console.error('Failed to save shortcuts:', error);
+            showError('Failed to save shortcuts');
+        }
+    }
+
+    // Reset button handler
+    if (resetButton) {
+        resetButton.addEventListener('click', async () => {
+            try {
+                currentShortcuts = await window.electronAPI.resetShortcuts();
+                updateShortcutDisplay();
+                showSuccess('Shortcuts reset to defaults!');
+            } catch (error) {
+                console.error('Failed to reset shortcuts:', error);
+                showError('Failed to reset shortcuts');
+            }
+        });
+    }
 }
 
 // Navigation between sections
@@ -521,11 +744,11 @@ function getLanguageName(code) {
 }
 
 function showLoading(show) {
-    const overlay = document.getElementById('loadingOverlay');
+    const loadingOverlay = document.getElementById('loadingOverlay');
     if (show) {
-        overlay.classList.add('active');
+        loadingOverlay.classList.add('active');
     } else {
-        overlay.classList.remove('active');
+        loadingOverlay.classList.remove('active');
     }
 }
 

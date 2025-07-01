@@ -66,20 +66,22 @@
             </nav>
             
             <div class="sidebar-footer">
-                <div class="sidebar-plan-info">
-                    <div class="plan-status-icon">
-                        <i class="fas fa-gem"></i>
+                <div class="footer-content">
+                    <div class="sidebar-plan-info">
+                        <div class="plan-status-icon">
+                            <i class="fas fa-gem"></i>
+                        </div>
+                        <div class="plan-status-text">
+                            <div class="plan-name">Free Plan</div>
+                            <a href="#" class="upgrade-link" data-section="plans">Upgrade to Pro</a>
+                        </div>
                     </div>
-                    <div class="plan-status-text">
-                        <div class="plan-name">Free Plan</div>
-                        <a href="#" class="upgrade-link" data-section="plans">Upgrade to Pro</a>
+                    
+                    <div class="sidebar-app-info">
+                        <span class="app-version">Version 1.0.0</span>
+                        <span class="separator">•</span>
+                        <span>© 2025 GLODING, Inc.</span>
                     </div>
-                </div>
-                
-                <div class="sidebar-app-info">
-                    <span>Version 1.0.0</span>
-                    <span class="separator">•</span>
-                    <span>© 2025 GLODING, Inc.</span>
                 </div>
             </div>
         </div>
@@ -385,6 +387,25 @@
                         </div>
                         
                         <div class="settings-section">
+                            <h3>Shortcuts</h3>
+                            <div class="setting-item">
+                                <label for="capture-translate">Capture & Translate</label>
+                                <input type="text" class="shortcut-input" id="capture-translate" readonly placeholder="Click to record">
+                            </div>
+                            <div class="setting-item">
+                                <label for="translate-paste">Translate & Paste</label>
+                                <input type="text" class="shortcut-input" id="translate-paste" readonly placeholder="Click to record">
+                            </div>
+                            <div class="setting-item">
+                                <label for="copy-last-translation">Copy Last Translation</label>
+                                <input type="text" class="shortcut-input" id="copy-last-translation" readonly placeholder="Click to record">
+                            </div>
+                            <div class="setting-item">
+                                <button type="button" id="reset-shortcuts-button" class="btn btn-secondary">Reset to Defaults</button>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-section">
                             <h3>Google Cloud API</h3>
                             <div class="setting-item">
                                 <label for="apiStatus">API Status</label>
@@ -415,7 +436,7 @@
                     <img src="../../assets/icons/transpad_512x512.png" alt="TransPad AI Logo" class="about-logo">
                     <h3>TransPad AI</h3>
                     <div class="about-version-info">
-                        <span>Version 1.0.0</span>
+                        <span class="app-version">Version 1.0.0</span>
                         <span class="separator">•</span>
                         <span>© 2025 GLODING, Inc.</span>
                     </div>

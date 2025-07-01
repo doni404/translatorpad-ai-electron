@@ -14,6 +14,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Vision and translation APIs
   extractAndTranslate: async (options) => ipcRenderer.invoke('extract-and-translate', options),
   getLanguages: async () => ipcRenderer.invoke('get-languages'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
+  // Shortcuts Management
+  getShortcuts: () => ipcRenderer.invoke('get-shortcuts'),
+  setShortcuts: (shortcuts) => ipcRenderer.invoke('set-shortcuts', shortcuts),
+  resetShortcuts: () => ipcRenderer.invoke('reset-shortcuts'),
+  setShortcutsRecording: (isRecording) => ipcRenderer.invoke('set-shortcuts-recording', isRecording),
+  
+  // Language Management
+  getTargetLanguage: () => ipcRenderer.invoke('get-target-language'),
+  setTargetLanguage: (language) => ipcRenderer.invoke('set-target-language', language),
 
   // File operations
   saveResult: (data) => ipcRenderer.invoke('save-result', data),
@@ -56,9 +67,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Gallery item removal
   removeFromGallery: (index) => ipcRenderer.invoke('remove-from-gallery', index),
 
+  // Image viewer operations
+  openImageInNewWindow: (imageData) => ipcRenderer.invoke('open-image-in-new-window', imageData),
+  onUpdateImage: (callback) => {
+    ipcRenderer.on('update-image', (event, imageData) => {
+      callback(imageData);
+    });
+  },
+
   // Clipboard operations
   copyAsImage: (imageDataUrl) => ipcRenderer.invoke('copy-as-image', imageDataUrl),
   copyAsText: (text) => ipcRenderer.invoke('copy-as-text', text),
+
+  // Drag operations
+  startImageDrag: (dragData) => ipcRenderer.invoke('start-image-drag', dragData),
+  endImageDrag: () => ipcRenderer.invoke('end-image-drag'),
 
   // History copy operations
   getOriginalImageForCopy: (imagePath) => ipcRenderer.invoke('get-original-image-for-copy', imagePath),
@@ -116,4 +139,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // External Links
   openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
+
+  // Gallery Management
+  resizeGalleryWindow: (size) => ipcRenderer.invoke('resize-gallery-window', size),
+
+  // Loading step updates
+  onUpdateLoadingStep: (callback) => {
+    ipcRenderer.on('update-loading-step', (event, stepText) => {
+      callback(stepText);
+    });
+  },
+
+  // Loading overlay control
+  onShowLoading: (callback) => {
+    ipcRenderer.on('show-loading', () => callback());
+  },
+  
+  onHideLoading: (callback) => {
+    ipcRenderer.on('hide-loading', () => callback());
+  }
 }); 

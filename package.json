@@ -1,6 +1,6 @@
 {
   "name": "transpad-ai",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "TransPad AI - Advanced screenshot translator for macOS",
   "main": "src/main/main.js",
   "scripts": {
@@ -39,6 +39,7 @@
   "dependencies": {
     "@google-cloud/translate": "^8.0.2",
     "@google-cloud/vision": "^4.0.2",
+    "electron-store": "^8.1.0",
     "is": "^3.3.0",
     "screenshot-desktop": "^1.15.0",
     "sharp": "^0.32.6"
