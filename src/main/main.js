@@ -306,15 +306,14 @@ class App {
     }
   }
 
-  createCaptureOverlay() {
+  createCaptureOverlay(cursorPosition = null) {
     // ABSOLUTE PREVENTION: If overlay already exists, do not create another
     if (this.captureWindow) {
       console.log('❌ Capture overlay (Lup) already exists, preventing duplicate');
       return;
     }
     
-    // Create the movable, resizable "Lup" window
-    this.captureWindow = new BrowserWindow({
+    const winOptions = {
       width: 500,
       height: 400,
       transparent: true,
@@ -329,9 +328,19 @@ class App {
         contextIsolation: true,
         preload: path.join(__dirname, 'preload.js')
       }
-    });
+    };
 
-    this.captureWindow.center();
+    if (cursorPosition) {
+      winOptions.x = Math.round(cursorPosition.x - winOptions.width / 2);
+      winOptions.y = Math.round(cursorPosition.y - winOptions.height / 2);
+    }
+    
+    // Create the movable, resizable "Lup" window
+    this.captureWindow = new BrowserWindow(winOptions);
+
+    if (!cursorPosition) {
+      this.captureWindow.center();
+    }
 
     const lupHtml = `
     <!DOCTYPE html>
@@ -855,10 +864,8 @@ class App {
       return;
     }
 
-    // Get screen dimensions for positioning
-    const { screen } = require('electron');
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { height: screenHeight } = primaryDisplay.workArea;
+    const display = this.lastActiveDisplay || screen.getPrimaryDisplay();
+    const { workArea } = display;
 
     // Gallery dimensions - START SMALL, will be resized dynamically
     const galleryWidth = 170; // Width for one item + padding
@@ -867,8 +874,8 @@ class App {
     this.miniGalleryWindow = new BrowserWindow({
       width: galleryWidth,
       height: galleryHeight,
-      x: 15, // Add margin from left edge
-      y: screenHeight - galleryHeight, // Start position, will be adjusted
+      x: workArea.x + 15, // Position relative to the active display's work area
+      y: workArea.y + workArea.height - galleryHeight, // Start position, will be adjusted
       transparent: true,
       frame: false,
       alwaysOnTop: true,
@@ -884,6 +891,11 @@ class App {
         preload: path.join(__dirname, 'preload.js'),
         webSecurity: false // Allow content to extend outside bounds
       }
+    });
+
+    // Make the gallery visible on all virtual desktops (Spaces)
+    this.miniGalleryWindow.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true
     });
 
     const galleryHtml = `
@@ -1607,15 +1619,14 @@ class App {
     }
 
     // --- WINDOW CREATION (if not already open) ---
-    const { screen } = require('electron');
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
+    const display = this.lastActiveDisplay || screen.getPrimaryDisplay();
+    const { workArea } = display;
     
-    const windowWidth = Math.round(screenWidth * 0.6);
-    const windowHeight = Math.round(screenHeight * 0.6);
+    const windowWidth = Math.round(workArea.width * 0.6);
+    const windowHeight = Math.round(workArea.height * 0.6);
     
-    const x = Math.round((screenWidth - windowWidth) / 2);
-    const y = Math.round((screenHeight - windowHeight) / 2);
+    const x = workArea.x + Math.round((workArea.width - windowWidth) / 2);
+    const y = workArea.y + Math.round((workArea.height - windowHeight) / 2);
 
     this.imageViewerWindow = new BrowserWindow({
       width: windowWidth,
@@ -1844,126 +1855,35 @@ class App {
           this.lastShortcutTime = now;
           console.log('Global shortcut activated');
           
-          console.log('Global shortcut pressed - starting smart capture sequence...');
-          
           try {
-            // Check permissions silently first
+            // Check permissions silently first. This is a quick operation.
             const hasPermission = await this.checkScreenPermissions(false);
             if (!hasPermission) {
-              console.log('Screen recording permission needed, showing permission dialog...');
-              // Now show the dialog since permission is actually needed
-              const dialogResult = await this.checkScreenPermissions(true);
-              if (!dialogResult) {
-                this.globalShortcutInProgress = false;
-                this.lastShortcutTime = 0;
-                return;
-              }
-              
-              // If permission was "not-determined", we need to trigger the system dialog
-              const initialStatus = systemPreferences.getMediaAccessStatus('screen');
-              if (initialStatus === 'not-determined') {
-                console.log('Triggering system permission dialog...');
-                
-                // Ensure main window is visible to show toast messages
-                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                  this.mainWindow.show();
-                  this.mainWindow.focus();
-                }
-                
-                // Take a quick screenshot to trigger the system permission dialog
-                try {
-                  await this.screenshotService.captureFullScreen();
-                } catch (error) {
-                  console.log('Screenshot attempt triggered permission dialog (expected)');
-                }
-                
-                // Wait for user to grant permission
-                const permissionGranted = await this.waitForScreenPermission();
-                if (!permissionGranted) {
-                  console.log('Permission denied via global shortcut');
-                  // Keep main window visible on permission denial
-                  if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                    this.mainWindow.show();
-                    this.mainWindow.focus();
-                  }
-                  this.globalShortcutInProgress = false;
-                  this.lastShortcutTime = 0;
-                  return;
-                }
-                
-                // IMPORTANT: Permission was just granted, so we need to verify it's actually working
-                // Wait a moment for the system to fully apply the permission
-                console.log('Permission granted, verifying...');
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Double-check permission status
-                const finalStatus = systemPreferences.getMediaAccessStatus('screen');
-                if (finalStatus !== 'granted') {
-                  console.log('Permission verification failed:', finalStatus);
-                  // Keep main window visible on permission issue
-                  if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                    this.mainWindow.show();
-                    this.mainWindow.focus();
-                  }
-                  this.globalShortcutInProgress = false;
-                  this.lastShortcutTime = 0;
-                  return;
-                }
-              }
+              this.showPermissionToast('TransPad AI needs Screen Recording permission. Please grant it in System Settings.');
+              this.globalShortcutInProgress = false; // Reset flag
+              return;
             }
             
-            console.log('Permission check passed, proceeding with capture...');
+            // --- OPTIMIZATION: Show the capture window immediately ---
             
-            // NEW STRATEGY: Use system APIs to properly handle window switching
-            
-            // Step 1: Get the current frontmost app before we interfere
-            const frontmostApp = await this.getFrontmostApplication();
-            console.log('Frontmost app detected:', frontmostApp);
-            
-            // Step 2: Hide TransPad AI completely (not just minimize)
+            // 1. Hide the main window first.
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
               this.mainWindow.hide();
             }
+
+            // 2. Get cursor position.
+            const cursor = screen.getCursorScreenPoint();
             
-            // Step 3: If the frontmost app wasn't TransPad AI, try to restore it
-            if (frontmostApp && frontmostApp !== 'TransPad AI' && frontmostApp !== 'Electron') {
-              console.log(`Attempting to restore ${frontmostApp}...`);
-              await this.restoreFrontmostApp(frontmostApp);
-              
-              // Wait for the app to redraw
-              await new Promise(resolve => setTimeout(resolve, 500));
-            } else {
-              // If TransPad AI was frontmost, just wait for desktop
-              console.log('TransPad AI was frontmost, waiting for desktop...');
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-            
-            // Step 4: Take screenshot
-            console.log('Taking screenshot of current state...');
-            const preCapture = await this.screenshotService.captureFullScreenBackground();
-            this.preCaptureScreenshot = preCapture;
-            console.log('Pre-capture completed, creating overlay...');
-            
-            // Step 5: Show overlay for selection - with additional check
-            if (!this.captureWindow) {
-              await this.startScreenCaptureWithoutPreCapture();
-            } else {
-              console.log('❌ Capture window created during process, skipping overlay creation');
-            }
-            
-            // Mark that we've used capture successfully (for future runs)
-            this.hasUsedCaptureSuccessfully = true;
-            
-            // DO NOT reset flag here - wait for actual capture completion or cancellation
-            
+            // 3. Create the overlay instantly at the cursor's position.
+            // All slow tasks (like taking screenshots) are deferred until the user presses Enter.
+            this.createCaptureOverlay(cursor);
+
           } catch (error) {
             console.error('Error in smart capture sequence:', error);
-            // On error, restore the main window
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
               this.mainWindow.show();
               this.mainWindow.focus();
             }
-            // Reset flag on error
             this.globalShortcutInProgress = false;
             this.lastShortcutTime = 0;
             console.log('Global shortcut error, flag reset');
@@ -2057,7 +1977,7 @@ class App {
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
           this.mainWindow.hide();
         }
-        await new Promise(resolve => setTimeout(resolve, 300)); // Wait for hide animation
+        // REMOVED: Unnecessary delay was here.
         this.createCaptureOverlay();
 
         return { success: true };
@@ -2075,10 +1995,13 @@ class App {
 
         const bounds = this.captureWindow.getBounds();
         
+        // --- Multi-monitor support: Determine the active display ---
+        const activeDisplay = screen.getDisplayMatching(bounds);
+        
         // --- Hide, screenshot, then show to avoid flicker ---
         this.captureWindow.hide();
         await new Promise(resolve => setTimeout(resolve, 60)); 
-        const screenshot = await this.screenshotService.captureFullScreenBackground();
+        const screenshot = await this.screenshotService.captureFullScreenBackground(activeDisplay);
         this.captureWindow.show();
         
         // --- Show progress step 1: Extracting ---
@@ -2088,7 +2011,8 @@ class App {
         
         const imagePath = await this.screenshotService.captureAreaFromExisting(
           bounds, 
-          screenshot.filePath
+          screenshot.filePath,
+          activeDisplay // Pass the active display for coordinate calculations
         );
         
         const extractionResult = await this.visionService.extractText(imagePath);
@@ -2103,29 +2027,21 @@ class App {
           this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
         }
 
-        // Use the selected target language instead of auto-detection
-        console.log(`Using selected target language: ${this.targetLanguage}`);
-        
-        // --- NEW: Add another loading step for image creation ---
-        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
-          this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
-        }
-
         const translationResult = await this.screenshotService.createImageWithTranslation(
           imagePath, 
           extractionResult.fullText, 
           extractionResult.textBlocks,
-          this.targetLanguage  // Pass the selected target language
+          this.targetLanguage
         );
 
         this.lastLupResult = {
-          id: `cap-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Unique ID
+          id: `cap-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           success: true,
           originalText: extractionResult.fullText,
           translatedText: translationResult.fullTranslatedText,
           imagePath: imagePath,
           detectedLanguage: translationResult.detectedLanguage,
-          targetLanguage: this.targetLanguage, // Use selected target language
+          targetLanguage: this.targetLanguage,
           textBlocks: extractionResult.textBlocks
         };
         
@@ -2136,6 +2052,9 @@ class App {
           this.mainWindow.webContents.send('capture-complete', this.lastLupResult);
         }
 
+        // Store the active display for positioning the gallery
+        this.lastActiveDisplay = activeDisplay; 
+        
         // 2. Add to mini gallery
         this.addCaptureToGallery(this.lastLupResult, translationResult);
 
@@ -2553,7 +2472,7 @@ class App {
     });
   }
 
-  async startScreenCaptureWithoutPreCapture() {
+  async startScreenCaptureWithoutPreCapture(cursorPosition = null) {
     try {
       // If capture window already exists, close it first
       if (this.captureWindow) {
@@ -2570,7 +2489,7 @@ class App {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // Create the transparent overlay for global area selection
-      this.createCaptureOverlay();
+      this.createCaptureOverlay(cursorPosition);
       
       return { success: true };
     } catch (error) {

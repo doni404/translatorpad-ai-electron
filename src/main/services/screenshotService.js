@@ -79,13 +79,12 @@ class ScreenshotService {
     }
   }
 
-  async captureFullScreenBackground() {
+  async captureFullScreenBackground(activeDisplay) {
     try {
       console.log('Taking background screenshot without window focus...');
       
-      // Get all displays and use the primary one
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const { width, height } = primaryDisplay.bounds;
+      const display = activeDisplay || screen.getPrimaryDisplay();
+      const { width, height } = display.bounds;
       
       // Use a higher resolution for better quality
       const sources = await desktopCapturer.getSources({
@@ -98,8 +97,8 @@ class ScreenshotService {
         throw new Error('No screen sources found for background capture');
       }
 
-      // Find the primary display source
-      const source = sources.find(s => s.display_id === primaryDisplay.id.toString()) || sources[0];
+      // Find the source for the active display
+      const source = sources.find(s => s.display_id === display.id.toString()) || sources[0];
       
       console.log('Background capture source found:', {
         name: source.name,
@@ -252,7 +251,7 @@ class ScreenshotService {
     }
   }
 
-  async captureAreaFromExisting(bounds, existingScreenshotPath) {
+  async captureAreaFromExisting(bounds, existingScreenshotPath, activeDisplay) {
     try {
       // Validate bounds
       if (!bounds || typeof bounds !== 'object') {
@@ -285,15 +284,13 @@ class ScreenshotService {
       
       console.log('Processing area with bounds:', { x, y, width, height });
       
-      // Get display information
-      const { screen } = require('electron');
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const scaleFactor = primaryDisplay.scaleFactor || 1;
+      const display = activeDisplay || screen.getPrimaryDisplay();
+      const scaleFactor = display.scaleFactor || 1;
       
       console.log('Display info:', {
-        bounds: primaryDisplay.bounds,
+        bounds: display.bounds,
         scaleFactor: scaleFactor,
-        workArea: primaryDisplay.workArea
+        workArea: display.workArea
       });
       
       // Get existing screenshot dimensions
@@ -307,13 +304,17 @@ class ScreenshotService {
         filePath: existingScreenshotPath
       });
       
+      // The screenshot is of a single display, so coordinates must be made relative to that display
+      const relativeX = x - display.bounds.x;
+      const relativeY = y - display.bounds.y;
+
       // Apply device pixel ratio scaling for Retina displays
       console.log('=== PRE-CAPTURED COORDINATE PROCESSING ===');
       console.log('Input coordinates (logical pixels):', { x, y, width, height });
       
       // Apply device pixel ratio scaling for Retina displays
-      let finalX = Math.round(x * scaleFactor);
-      let finalY = Math.round(y * scaleFactor);
+      let finalX = Math.round(relativeX * scaleFactor);
+      let finalY = Math.round(relativeY * scaleFactor);
       let finalWidth = Math.round(width * scaleFactor);
       let finalHeight = Math.round(height * scaleFactor);
       
