@@ -302,10 +302,10 @@ async function setupShortcutsPage() {
 
     function formatShortcutForDisplay(shortcut) {
         return shortcut
-            .replace(/CommandOrControl/g, '⌘')
-            .replace(/Shift/g, '⇧')
-            .replace(/Alt/g, '⌥')
-            .replace(/Control/g, '⌃')
+            .replace(/CommandOrControl/g, '⌘ CMD')
+            .replace(/Shift/g, '⇧ SHFT')
+            .replace(/Alt/g, '⌥ OPT')
+            .replace(/Control/g, '⌃ CTRL')
             .replace(/\+/g, ' + ');
     }
 
@@ -404,11 +404,9 @@ async function setupShortcutsPage() {
                     saveShortcuts();
                 } else {
                     // Invalid shortcut - show error message
-                    input.value = 'Invalid shortcut - try again';
-                    input.style.color = '#e53e3e';
+                    input.value = '<span style="color: #e53e3e;">Invalid shortcut - try again</span>';
                     setTimeout(() => {
                         input.value = currentShortcuts[key] ? formatShortcutForDisplay(currentShortcuts[key]) : '';
-                        input.style.color = '';
                     }, 2000);
                 }
             }
@@ -533,28 +531,36 @@ async function loadSupportedLanguages() {
 }
 
 function populateLanguageSelects() {
-    const selects = [
-        document.getElementById('defaultLanguage'),
-        document.getElementById('targetLanguageSelect')
+    const defaultLanguageSelect = document.getElementById('defaultLanguage');
+    const targetLanguageSelect = document.getElementById('targetLanguageSelect');
+
+    const topMenuLanguages = [
+        { code: 'ja', name: 'Japanese' },
+        { code: 'en', name: 'English' },
+        { code: 'id', name: 'Indonesian' }
     ];
 
-    selects.forEach(select => {
-        if (select) {
-            select.innerHTML = '';
-            availableLanguages.forEach(lang => {
-                const option = document.createElement('option');
-                option.value = lang.code;
-                option.textContent = lang.name;
-                
-                // Set Japanese as default for defaultLanguage select
-                if (select.id === 'defaultLanguage' && lang.code === 'ja') {
-                    option.selected = true;
-                }
-                
-                select.appendChild(option);
-            });
-        }
-    });
+    // Populate the settings dropdown with only the 3 main languages
+    if (defaultLanguageSelect) {
+        defaultLanguageSelect.innerHTML = '';
+        topMenuLanguages.forEach(lang => {
+            const option = document.createElement('option');
+            option.value = lang.code;
+            option.textContent = lang.name;
+            defaultLanguageSelect.appendChild(option);
+        });
+    }
+
+    // Populate the re-translation modal dropdown with all available languages
+    if (targetLanguageSelect) {
+        targetLanguageSelect.innerHTML = '';
+        availableLanguages.forEach(lang => {
+            const option = document.createElement('option');
+            option.value = lang.code;
+            option.textContent = lang.name;
+            targetLanguageSelect.appendChild(option);
+        });
+    }
     
     // Also ensure we store the default language
     if (!localStorage.getItem('targetLanguage')) {
@@ -824,8 +830,12 @@ function saveSettings(e) {
         captureQuality: document.getElementById('captureQuality').value
     };
     
+    // Save to local storage first
     localStorage.setItem('translatorpad-settings', JSON.stringify(settings));
-    localStorage.setItem('targetLanguage', settings.defaultLanguage);
+    
+    // Notify the main process to update the top menu
+    window.electronAPI.setTargetLanguage(settings.defaultLanguage);
+
     showSuccess('Settings saved successfully!');
 }
 
@@ -836,9 +846,24 @@ function loadSettings() {
         const select = document.getElementById('defaultLanguage');
         if (select) {
             select.value = settings.defaultLanguage;
+            // Add event listener to sync changes to the main process
+            select.addEventListener('change', (e) => {
+                const newLang = e.target.value;
+                window.electronAPI.setTargetLanguage(newLang);
+                localStorage.setItem('targetLanguage', newLang);
+            });
         }
     }
     
+    // Listen for changes from the main process (e.g., from the top menu)
+    window.electronAPI.onTargetLanguageChanged((language) => {
+        const select = document.getElementById('defaultLanguage');
+        if (select && select.value !== language) {
+            select.value = language;
+            localStorage.setItem('targetLanguage', language);
+        }
+    });
+
     if (settings.autoDetect !== undefined) {
         const checkbox = document.getElementById('autoDetect');
         if (checkbox) {

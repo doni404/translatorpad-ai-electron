@@ -2027,11 +2027,13 @@ class App {
           this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
         }
 
+        const quality = this.storeService.store.get('captureQuality', 'medium');
         const translationResult = await this.screenshotService.createImageWithTranslation(
           imagePath, 
           extractionResult.fullText, 
           extractionResult.textBlocks,
-          this.targetLanguage
+          this.targetLanguage,
+          quality
         );
 
         this.lastLupResult = {
@@ -2242,10 +2244,15 @@ class App {
     // Clipboard operations
     ipcMain.handle('copy-as-image', async (event, imageDataUrl) => {
       try {
-        // Convert data URL to native image
+        // Convert data URL to native image and copy to clipboard
         const image = nativeImage.createFromDataURL(imageDataUrl);
         clipboard.writeImage(image);
-        console.log('Image copied to clipboard successfully');
+        
+        // Generate the filename that would be used if this were saved as a file
+        const timestamp = this.formatDateForFilename(new Date());
+        const intendedFilename = `TransPad ${timestamp}.png`;
+        
+        console.log('Image copied to clipboard successfully (intended filename:', intendedFilename + ')');
         return { success: true };
       } catch (error) {
         console.error('Error copying image to clipboard:', error);
@@ -2413,9 +2420,9 @@ class App {
           fs.mkdirSync(tempDir, { recursive: true });
         }
         
-        // Use TransPad-AI naming format with timestamp
-        const timestamp = Date.now();
-        const tempFilePath = path.join(tempDir, `TransPad-AI-${timestamp}.png`);
+        // Use TransPad naming format with timestamp
+        const timestamp = this.formatDateForFilename(new Date());
+        const tempFilePath = path.join(tempDir, `TransPad ${timestamp}.png`);
         fs.writeFileSync(tempFilePath, imageBuffer);
         
         // Store the temp file path for cleanup
@@ -2470,6 +2477,17 @@ class App {
         return { success: false, error: error.message };
       }
     });
+  }
+
+  formatDateForFilename(date) {
+    const pad = (num) => num.toString().padStart(2, '0');
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1);
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
+    return `${year}-${month}-${day} ${hours}.${minutes}.${seconds}`;
   }
 
   async startScreenCaptureWithoutPreCapture(cursorPosition = null) {
@@ -2820,11 +2838,13 @@ class App {
       }
 
       // 4. Translate and create the new image
+      const quality = this.storeService.store.get('captureQuality', 'medium');
       const translationResult = await this.screenshotService.createImageWithTranslation(
         imagePath,
         extractionResult.fullText,
         extractionResult.textBlocks,
-        this.targetLanguage
+        this.targetLanguage,
+        quality
       );
 
       // 5. Send result to renderer (same as capture)
