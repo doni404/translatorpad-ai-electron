@@ -512,11 +512,14 @@ class App {
             .loading-spinner {
                 width: 40px;
                 height: 40px;
-                border: 3px solid rgba(255, 255, 255, 0.3);
-                border-top: 3px solid #ffffff;
                 border-radius: 50%;
-                animation: spin 1s linear infinite;
+                /* Softer, pastel-like gradient */
+                background: conic-gradient(from 0deg, #ffc1e3, #d6bfff, #b3edff, #ffdfb3, #ffc1e3);
+                /* Slower and smoother animation */
+                animation: spin 1.8s linear infinite;
                 margin-bottom: 15px;
+                -webkit-mask: radial-gradient(farthest-side, #0000 calc(100% - 4px), #000 0);
+                mask: radial-gradient(farthest-side, #0000 calc(100% - 4px), #000 0);
             }
             @keyframes spin {
                 0% { transform: rotate(0deg); }
