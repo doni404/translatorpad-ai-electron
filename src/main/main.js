@@ -52,10 +52,10 @@ class App {
 
   createMainWindow() {
     this.mainWindow = new BrowserWindow({
-      width: 1000,
-      height: 700,
-      minWidth: 1000,
-      minHeight: 700,
+      width: 800,
+      height: 600,
+      minWidth: 800,
+      minHeight: 600,
       title: 'TransPad AI',
       titleBarStyle: 'default',
       movable: true,
