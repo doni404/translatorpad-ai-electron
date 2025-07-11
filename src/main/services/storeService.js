@@ -22,7 +22,7 @@ const schema = {
 	},
 	targetLanguage: {
 		type: 'string',
-		default: 'en'
+		default: 'ja'
 	}
 };
 

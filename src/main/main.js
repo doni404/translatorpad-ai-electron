@@ -338,6 +338,25 @@ class App {
     // Create the movable, resizable "Lup" window
     this.captureWindow = new BrowserWindow(winOptions);
 
+    // Temporarily set a minimal Edit menu to enable copy/paste in the capture window
+    const originalMenu = Menu.getApplicationMenu();
+    const editMenuTemplate = [
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' }
+        ]
+      }
+    ];
+    const editMenu = Menu.buildFromTemplate(editMenuTemplate);
+    Menu.setApplicationMenu(editMenu);
+
     if (!cursorPosition) {
       this.captureWindow.center();
     }
@@ -367,11 +386,12 @@ class App {
                 -webkit-app-region: drag;
                 cursor: grab;
 
-                /* Glass effect (glow is now handled by pseudo-element) */
+                /* Inner Glow effect from sample */
                 background: rgba(255, 255, 255, 0.05);
                 backdrop-filter: blur(10px);
                 border: 1px solid rgba(255, 255, 255, 0.1);
-                
+                /* animation: glow-inset 2.5s ease-in-out infinite; MOVED to ::before */
+
                 display: flex;
                 justify-content: center;
                 align-items: center;
@@ -379,30 +399,66 @@ class App {
                 transition: all 0.3s ease-in-out;
             }
 
-            /* The glow layer */
-            #container::before {
-                content: '';
+            #top-left-controls {
                 position: absolute;
-                inset: 0;
-                border-radius: 20px; /* Match parent */
-                animation: glow-inset 2.5s ease-in-out infinite; /* Faster animation */
-                z-index: -1; /* Behind the glass by default */
-                pointer-events: none; /* Make it click-through */
-                transition: z-index 0.1s step-end;
+                top: 10px;
+                left: 10px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                z-index: 100;
+                -webkit-app-region: no-drag;
+            }
+
+            #view-switch {
+                display: flex;
+                background: rgba(0,0,0,0.4);
+                border-radius: 12px;
+                border: 1px solid rgba(255,255,255,0.1);
+                -webkit-app-region: no-drag;
+            }
+            .view-btn {
+                background: transparent;
+                border: none;
+                color: rgba(255,255,255,0.6);
+                padding: 4px 8px;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                font-size: 12px;
+            }
+            .view-btn:hover {
+                color: white;
+            }
+            .view-btn.active {
+                background: rgba(255,255,255,0.15);
+                color: white;
+                border-radius: 10px;
             }
             
             #container.result-shown {
-                /* When result is shown, make the glass pane transparent */
+                /* When any result is shown, make the glass pane transparent */
                 background: transparent;
                 backdrop-filter: none;
                 border: none;
             }
 
-            #container.result-shown::before {
-                /* Bring the glow layer to the front */
-                z-index: 10;
+            /* The glow layer */
+            #container::before {
+                content: '';
+                position: absolute;
+                inset: 0;
+                border-radius: 20px; /* Match container */
+                animation: glow-inset 2.5s ease-in-out infinite;
+                /* Bring the glow layer to the front for ALL results */
+                z-index: -1; /* Behind the glass by default */
+                pointer-events: none; /* Make it click-through */
+                transition: z-index 0.1s step-end;
             }
-
+            
+            #container.result-shown::before {
+                z-index: 10; /* Bring the glow in front of the result image (z-index 5) */
+            }
+            
             @keyframes glow-inset {
                 0%, 100% {
                     box-shadow:
@@ -494,7 +550,7 @@ class App {
                  display: none; /* Hidden by default */
                  border-radius: 18px; /* Fit inside the container's radius */
                  overflow: hidden;
-                 z-index: 1; /* Ensure it's part of the stacking context */
+                 z-index: 5; /* Sit below the glow overlay */
             }
             #container.result-shown #result-container {
                 display: block;
@@ -505,9 +561,6 @@ class App {
                 object-fit: cover;
             }
             #language-indicator {
-                position: absolute;
-                top: 10px;
-                left: 10px;
                 background: rgba(0,0,0,0.7);
                 color: white;
                 padding: 4px 8px;
@@ -515,7 +568,6 @@ class App {
                 font-size: 12px;
                 font-weight: 600;
                 -webkit-app-region: no-drag;
-                z-index: 10;
             }
             #controls {
                 position: absolute;
@@ -635,11 +687,46 @@ class App {
             .copy-option:not(:last-child) {
                 border-bottom: 1px solid rgba(255,255,255,0.1);
             }
+            #text-result-container {
+                display: none;
+                position: absolute;
+                inset: 0; /* Let it fill the container */
+                background: white;
+                border-radius: 20px; /* Match container */
+                overflow: hidden; /* Hide scrollbar overflow from container */
+                z-index: 5; /* Sit below the glow overlay */
+                box-sizing: border-box;
+                padding: 0; /* Remove padding to allow textarea to fill it */
+            }
+            #text-result-container textarea {
+                width: 100%;
+                height: 100%;
+                border: none;
+                border-radius: 20px; /* Match container */
+                padding: 15px; /* Add padding inside the text area */
+                box-sizing: border-box;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+                background-color: white;
+                resize: none;
+                color: #222;
+                -webkit-app-region: no-drag; /* CRITICAL: Make textarea interactive */
+            }
+            #text-result-container textarea:focus {
+                outline: none;
+            }
         </style>
     </head>
     <body>
         <div id="container">
-            <div id="language-indicator">Any → English</div>
+            <div id="top-left-controls">
+                <div id="language-indicator">Any → English</div>
+                <div id="view-switch">
+                    <button id="image-view-btn" class="view-btn active" title="Show Image"><i class="fas fa-image"></i></button>
+                    <button id="text-view-btn" class="view-btn" title="Show Text"><i class="fas fa-align-left"></i></button>
+                </div>
+            </div>
             <div id="instruction-text">Press Enter to Capture & Translate</div>
             <div id="loading-container">
                 <div class="loading-spinner"></div>
@@ -649,12 +736,15 @@ class App {
             <div id="result-container">
                  <img id="resultImage" />
             </div>
+            <div id="text-result-container">
+                <textarea id="translated-text-view"></textarea>
+            </div>
         </div>
 
         <!-- Controls are separate now -->
         <div id="controls">
             <button id="clearBtn" class="btn" style="display: none;"><i class="fas fa-sync-alt"></i><span class="tooltip">Clear</span></button>
-            <button id="copyBtn" class="btn" style="display: none;"><i class="fas fa-copy"></i><span class="tooltip">Copy</span></button>
+            <button id="copyBtn" class="btn" style="display: none;"><span class="btn-icon"><i class="fas fa-copy"></i></span><span class="tooltip">Copy</span></button>
             <button id="openInAppBtn" class="btn" style="display: none;"><i class="fas fa-arrow-up-right-from-square"></i><span class="tooltip">Go App</span></button>
         </div>
         <button id="closeBtn" class="btn"><i class="fas fa-times"></i><span class="tooltip tooltip-bottom">Close</span></button>
@@ -683,6 +773,10 @@ class App {
             const languageIndicator = document.getElementById('language-indicator');
             const instructionText = document.getElementById('instruction-text');
             const loadingContainer = document.getElementById('loading-container');
+            const imageViewBtn = document.getElementById('image-view-btn');
+            const textViewBtn = document.getElementById('text-view-btn');
+            const textResultContainer = document.getElementById('text-result-container');
+            const translatedTextView = document.getElementById('translated-text-view');
 
             // Store the current result data for copying
             let currentResult = null;
@@ -699,6 +793,7 @@ class App {
                 instructionText.style.display = 'none';
                 loadingContainer.style.display = 'flex';
                 resultContainer.style.display = 'none';
+                textResultContainer.style.display = 'none';
             }
 
             // Function to hide loading state
@@ -713,7 +808,7 @@ class App {
 
             document.addEventListener('keydown', (e) => {
                 // Check for Enter key and that we are not already showing a result or loading
-                if (e.key === 'Enter' && resultContainer.style.display !== 'block' && loadingContainer.style.display !== 'flex') {
+                if (e.key === 'Enter' && !container.classList.contains('result-shown') && loadingContainer.style.display !== 'flex') {
                     showLoading(); // Show loading immediately
                     window.electronAPI.captureLupArea();
                 }
@@ -730,6 +825,7 @@ class App {
 
             clearBtn.addEventListener('click', () => {
                 resultContainer.style.display = 'none'; // Hide image
+                textResultContainer.style.display = 'none'; // Hide text view
                 container.classList.remove('result-shown'); // Restore glass and glow
                 instructionText.style.display = 'block'; // Show instructions again
                 hideLoading(); // Make sure loading is hidden
@@ -744,10 +840,22 @@ class App {
                 window.electronAPI.openInApp();
             });
 
-            // Copy button dropdown functionality
-            copyBtn.addEventListener('click', (e) => {
+            // Copy button functionality
+            copyBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                if (currentResult) {
+                if (!currentResult) return;
+
+                if (textViewBtn.classList.contains('active')) {
+                    // In text view, copy the content of the textarea directly
+                    try {
+                        await window.electronAPI.copyAsText(translatedTextView.value);
+                        showCopyFeedback(true, '📝');
+                    } catch (error) {
+                        console.error('Failed to copy translated text from textarea:', error);
+                        showCopyFeedback(false, '📝');
+                    }
+                } else {
+                    // In image view, toggle the dropdown
                     const isVisible = copyDropdown.style.display === 'flex';
                     copyDropdown.style.display = isVisible ? 'none' : 'flex';
                 }
@@ -819,17 +927,22 @@ class App {
 
             // Helper function for copy feedback
             function showCopyFeedback(success, icon) {
+                const iconContainer = copyBtn.querySelector('.btn-icon');
+                if (!iconContainer) return;
+
+                const originalIconHTML = iconContainer.innerHTML; // Store original icon HTML
+
                 if (success) {
                     copyBtn.style.background = 'rgba(34, 197, 94, 0.7)';
-                    copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                    iconContainer.innerHTML = '<i class="fas fa-check"></i>';
                 } else {
                     copyBtn.style.background = 'rgba(239, 68, 68, 0.7)';
-                    copyBtn.innerHTML = '<i class="fas fa-times"></i>';
+                    iconContainer.innerHTML = '<i class="fas fa-times"></i>';
                 }
                 
                 setTimeout(() => {
                     copyBtn.style.background = 'rgba(0,0,0,0.4)';
-                    copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                    iconContainer.innerHTML = originalIconHTML; // Restore original icon
                 }, 1500);
             }
 
@@ -842,9 +955,17 @@ class App {
             window.electronAPI.onLupResult((imageDataUrl) => {
                 hideLoading(); // Hide loading first
                 resultImage.src = imageDataUrl;
-                resultContainer.style.display = 'block';
-                container.classList.add('result-shown'); // Remove glass and glow to frame result
-                instructionText.style.display = 'none'; // Hide instructions on result
+                container.classList.add('result-shown');
+                
+                // Show the correct view based on the active button
+                if (imageViewBtn.classList.contains('active')) {
+                    textResultContainer.style.display = 'none';
+                    resultContainer.style.display = 'block';
+                } else {
+                    resultContainer.style.display = 'none';
+                    textResultContainer.style.display = 'flex';
+                }
+
                 clearBtn.style.display = 'flex'; // Show clear button
                 copyBtn.style.display = 'flex'; // Show copy button
                 openInAppBtn.style.display = 'flex'; // Show open in app button
@@ -865,6 +986,15 @@ class App {
                     currentResult.detectedLanguage = resultData.detectedLanguage;
                     currentResult.targetLanguage = resultData.targetLanguage;
                 }
+                // Also update the text view
+                translatedTextView.value = resultData.translatedText;
+            });
+
+            // Add listener to keep currentResult updated with edits
+            translatedTextView.addEventListener('input', () => {
+                if (currentResult) {
+                    currentResult.translatedText = translatedTextView.value;
+                }
             });
 
             // Listen for original image data
@@ -879,6 +1009,54 @@ class App {
                 const loadingStepsElement = document.querySelector('.loading-steps');
                 if (loadingStepsElement) {
                     loadingStepsElement.textContent = stepText;
+                }
+            });
+
+            // --- View Switcher Logic ---
+            imageViewBtn.addEventListener('click', () => {
+                if (!imageViewBtn.classList.contains('active')) {
+                    imageViewBtn.classList.add('active');
+                    textViewBtn.classList.remove('active');
+
+                    // Update copy button tooltip and ensure dropdown is hidden
+                    copyBtn.querySelector('.tooltip').textContent = 'Copy';
+                    copyDropdown.style.display = 'none';
+
+                    // Only switch views if a result is already shown
+                    if (container.classList.contains('result-shown')) {
+                        resultContainer.style.display = 'block';
+                        textResultContainer.style.display = 'none';
+                    }
+                }
+            });
+
+            textViewBtn.addEventListener('click', () => {
+                if (!textViewBtn.classList.contains('active')) {
+                    textViewBtn.classList.add('active');
+                    imageViewBtn.classList.remove('active');
+                    
+                    // Update copy button tooltip and ensure dropdown is hidden
+                    copyBtn.querySelector('.tooltip').textContent = 'Copy Text';
+                    copyDropdown.style.display = 'none';
+
+                    // Only switch views if a result is already shown
+                    if (container.classList.contains('result-shown')) {
+                        textResultContainer.style.display = 'flex';
+                        resultContainer.style.display = 'none';
+                    }
+                }
+            });
+
+            pasteBtn.addEventListener('click', async () => {
+                try {
+                    const result = await window.electronAPI.readFromClipboard();
+                    if (result.success) {
+                        translatedTextView.value = result.text;
+                        // Manually trigger the input event to update the underlying data
+                        translatedTextView.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                } catch (error) {
+                    console.error('Failed to paste text:', error);
                 }
             });
 
@@ -902,6 +1080,8 @@ class App {
     // Handle window close
     this.captureWindow.on('closed', () => {
       this.captureWindow = null;
+      // Restore the original application menu
+      Menu.setApplicationMenu(originalMenu);
       // Reset global shortcut flag when overlay is closed/cancelled
       this.globalShortcutInProgress = false;
       console.log('Capture overlay closed, flag reset');
@@ -2524,6 +2704,16 @@ class App {
         return { success: true };
       } catch (error) {
         console.error('Error creating image viewer window:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('read-from-clipboard', async () => {
+      try {
+        const text = clipboard.readText();
+        return { success: true, text: text };
+      } catch (error) {
+        console.error('Error reading from clipboard:', error);
         return { success: false, error: error.message };
       }
     });
