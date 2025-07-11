@@ -145,6 +145,18 @@ class App {
         ]
       },
       {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' }
+        ]
+      },
+      {
         label: 'Translation',
         submenu: [
           {
@@ -337,25 +349,6 @@ class App {
     
     // Create the movable, resizable "Lup" window
     this.captureWindow = new BrowserWindow(winOptions);
-
-    // Temporarily set a minimal Edit menu to enable copy/paste in the capture window
-    const originalMenu = Menu.getApplicationMenu();
-    const editMenuTemplate = [
-      {
-        label: 'Edit',
-        submenu: [
-          { role: 'undo' },
-          { role: 'redo' },
-          { type: 'separator' },
-          { role: 'cut' },
-          { role: 'copy' },
-          { role: 'paste' },
-          { role: 'selectAll' }
-        ]
-      }
-    ];
-    const editMenu = Menu.buildFromTemplate(editMenuTemplate);
-    Menu.setApplicationMenu(editMenu);
 
     if (!cursorPosition) {
       this.captureWindow.center();
@@ -564,13 +557,25 @@ class App {
                 object-fit: cover;
             }
             #language-indicator {
-                background: rgba(0,0,0,0.7);
-                color: white;
-                padding: 4px 8px;
+                background: rgba(0,0,0,0.4); /* Match other buttons */
+                color: rgba(255,255,255,0.8);
+                padding: 2px 8px; /* Match view-btn */
                 border-radius: 12px;
-                font-size: 12px;
-                font-weight: 600;
+                font-size: 12px; /* Match view-btn */
+                font-weight: 500;
                 -webkit-app-region: no-drag;
+                border: 1px solid rgba(255,255,255,0.1);
+                cursor: pointer;
+                transition: all 0.2s ease;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            #language-indicator .flag {
+                font-size: 14px;
+            }
+            #language-indicator:hover {
+                background: rgba(0,0,0,0.6);
             }
             #controls {
                 position: absolute;
@@ -719,12 +724,63 @@ class App {
             #text-result-container textarea:focus {
                 outline: none;
             }
+            #language-indicator:hover {
+                background: rgba(0,0,0,0.6);
+            }
+            #language-dropdown {
+                position: absolute;
+                top: 50px; /* Position below the indicator */
+                left: 10px;
+                background: rgba(0,0,0,0.85);
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 12px;
+                min-width: 180px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                display: none;
+                flex-direction: column;
+                z-index: 1000;
+                -webkit-app-region: no-drag;
+            }
+            .lang-option {
+                padding: 8px 12px;
+                color: white;
+                font-size: 12px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.2s ease;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                border: none;
+                background: transparent;
+                text-align: left;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                white-space: nowrap;
+            }
+            .lang-option:hover {
+                background: rgba(255,255,255,0.15);
+            }
+            .lang-option:not(:last-child) {
+                border-bottom: 1px solid rgba(255,255,255,0.1);
+            }
+            #controls {
+                position: absolute;
+                bottom: 15px; /* Moved to bottom */
+                right: 15px;
+                display: flex;
+                gap: 8px;
+                -webkit-app-region: no-drag;
+                z-index: 100; /* Ensure controls are on top of the glow */
+            }
         </style>
     </head>
     <body>
         <div id="container">
             <div id="top-left-controls">
-                <div id="language-indicator">Any → English</div>
+                <div id="language-indicator" title="Change Language">
+                    Any → <span class="flag">🇯🇵</span>
+                </div>
                 <div id="view-switch">
                     <button id="image-view-btn" class="view-btn active" title="Show Image"><i class="fas fa-image"></i></button>
                     <button id="text-view-btn" class="view-btn" title="Show Text"><i class="fas fa-align-left"></i></button>
@@ -760,6 +816,12 @@ class App {
             <button class="copy-option" id="copyTranslatedText">📝 Copy Translated Text</button>
         </div>
 
+        <div id="language-dropdown">
+            <button class="lang-option" data-lang="ja">🇯🇵 Japanese</button>
+            <button class="lang-option" data-lang="en">🇺🇸 English</button>
+            <button class="lang-option" data-lang="id">🇮🇩 Indonesian</button>
+        </div>
+
         <script>
             const container = document.getElementById('container');
             const clearBtn = document.getElementById('clearBtn');
@@ -774,6 +836,7 @@ class App {
             const resultContainer = document.getElementById('result-container');
             const resultImage = document.getElementById('resultImage');
             const languageIndicator = document.getElementById('language-indicator');
+            const languageDropdown = document.getElementById('language-dropdown');
             const instructionText = document.getElementById('instruction-text');
             const loadingContainer = document.getElementById('loading-container');
             const imageViewBtn = document.getElementById('image-view-btn');
@@ -785,10 +848,10 @@ class App {
             let currentResult = null;
 
             // Language display mapping
-            const languageLabels = {
-                'ja': 'Any → Japanese',
-                'en': 'Any → English',
-                'id': 'Any → Indonesian'
+            const languageMap = {
+                'ja': { name: 'Japanese', flag: '🇯🇵' },
+                'en': { name: 'English', flag: '🇺🇸' },
+                'id': { name: 'Indonesian', flag: '🇮🇩' }
             };
 
             // Function to show loading state
@@ -806,7 +869,12 @@ class App {
 
             // Update language indicator when target language changes
             window.electronAPI.onTargetLanguageChanged((language) => {
-                languageIndicator.textContent = languageLabels[language] || 'Any → English';
+                const langInfo = languageMap[language];
+                if (langInfo) {
+                    languageIndicator.innerHTML = 'Any → <span class="flag">' + langInfo.flag + '</span>';
+                } else {
+                    languageIndicator.innerHTML = 'Any → <span class="flag">❔</span>';
+                }
             });
 
             document.addEventListener('keydown', (e) => {
@@ -950,8 +1018,32 @@ class App {
             }
 
             // Close dropdown when clicking elsewhere
-            document.addEventListener('click', () => {
+            document.addEventListener('click', (e) => {
+                // Hide copy dropdown if clicking outside of it
+                if (!copyBtn.contains(e.target) && !copyDropdown.contains(e.target)) {
+                    copyDropdown.style.display = 'none';
+                }
+                // Hide language dropdown if clicking outside of it
+                if (!languageIndicator.contains(e.target) && !languageDropdown.contains(e.target)) {
+                    languageDropdown.style.display = 'none';
+                }
+            });
+
+            // --- Language Selector Logic ---
+            languageIndicator.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isVisible = languageDropdown.style.display === 'flex';
+                languageDropdown.style.display = isVisible ? 'none' : 'flex';
+                // Hide copy dropdown if it's open
                 copyDropdown.style.display = 'none';
+            });
+
+            languageDropdown.querySelectorAll('.lang-option').forEach(button => {
+                button.addEventListener('click', () => {
+                    const lang = button.getAttribute('data-lang');
+                    window.electronAPI.setTargetLanguage(lang);
+                    languageDropdown.style.display = 'none'; // Hide after selection
+                });
             });
 
             // Listen for the translated image from main process
@@ -1083,8 +1175,6 @@ class App {
     // Handle window close
     this.captureWindow.on('closed', () => {
       this.captureWindow = null;
-      // Restore the original application menu
-      Menu.setApplicationMenu(originalMenu);
       // Reset global shortcut flag when overlay is closed/cancelled
       this.globalShortcutInProgress = false;
       console.log('Capture overlay closed, flag reset');
