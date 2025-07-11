@@ -363,21 +363,63 @@ class App {
                 position: absolute;
                 top: 0; left: 0; right: 0; bottom: 0;
                 box-sizing: border-box;
-                border-radius: 12px;
-                -webkit-app-region: drag; /* The entire window is draggable again */
-                cursor: grab; /* Change cursor to indicate movement */
-                
-                /* Visual style */
-                background: rgba(180, 180, 180, 0.2);
-                backdrop-filter: blur(12px);
-                border: 1px solid rgba(255, 255, 255, 0.75);
-                box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.85), 0 8px 35px rgba(0,0,0,0.3);
+                border-radius: 20px;
+                -webkit-app-region: drag;
+                cursor: grab;
+
+                /* Glass effect (glow is now handled by pseudo-element) */
+                background: rgba(255, 255, 255, 0.05);
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.1);
                 
                 display: flex;
                 justify-content: center;
                 align-items: center;
-                flex-direction: column; /* Center content vertically */
+                flex-direction: column;
+                transition: all 0.3s ease-in-out;
             }
+
+            /* The glow layer */
+            #container::before {
+                content: '';
+                position: absolute;
+                inset: 0;
+                border-radius: 20px; /* Match parent */
+                animation: glow-inset 2.5s ease-in-out infinite; /* Faster animation */
+                z-index: -1; /* Behind the glass by default */
+                pointer-events: none; /* Make it click-through */
+                transition: z-index 0.1s step-end;
+            }
+            
+            #container.result-shown {
+                /* When result is shown, make the glass pane transparent */
+                background: transparent;
+                backdrop-filter: none;
+                border: none;
+            }
+
+            #container.result-shown::before {
+                /* Bring the glow layer to the front */
+                z-index: 10;
+            }
+
+            @keyframes glow-inset {
+                0%, 100% {
+                    box-shadow:
+                        inset 0 5px 8px rgba(255, 89, 172, 0.6),   /* Top - Pink */
+                        inset 0 -5px 8px rgba(162, 89, 255, 0.6),  /* Bottom - Purple */
+                        inset 5px 0 8px rgba(255, 157, 89, 0.6),   /* Left - Orange */
+                        inset -5px 0 8px rgba(0, 255, 255, 0.6);   /* Right - Cyan */
+                }
+                50% {
+                    box-shadow:
+                        inset 0 6px 12px rgba(162, 89, 255, 0.6),  /* Top - Purple */
+                        inset 0 -6px 12px rgba(0, 255, 255, 0.6),   /* Bottom - Cyan */
+                        inset 6px 0 12px rgba(255, 89, 172, 0.6),   /* Left - Pink */
+                        inset -6px 0 12px rgba(255, 157, 89, 0.6);  /* Right - Orange */
+                }
+            }
+            
             #drag-handle {
                 position: absolute;
                 top: 0;
@@ -450,8 +492,12 @@ class App {
                  position: absolute;
                  top: 1px; left: 1px; right: 1px; bottom: 1px; /* Inset within border */
                  display: none; /* Hidden by default */
-                 border-radius: 11px;
+                 border-radius: 18px; /* Fit inside the container's radius */
                  overflow: hidden;
+                 z-index: 1; /* Ensure it's part of the stacking context */
+            }
+            #container.result-shown #result-container {
+                display: block;
             }
             #resultImage {
                 width: 100%;
@@ -478,6 +524,7 @@ class App {
                 display: flex;
                 gap: 8px;
                 -webkit-app-region: no-drag;
+                z-index: 100; /* Ensure controls are on top of the glow */
             }
             .btn {
                 background: rgba(0,0,0,0.4); /* Default visible background */
@@ -531,6 +578,7 @@ class App {
                 top: 12px;
                 right: 12px;
                 -webkit-app-region: no-drag;
+                z-index: 100; /* Ensure close button is on top of the glow */
             }
             
             /* Copy dropdown positioned outside the Lup */
@@ -682,6 +730,7 @@ class App {
 
             clearBtn.addEventListener('click', () => {
                 resultContainer.style.display = 'none'; // Hide image
+                container.classList.remove('result-shown'); // Restore glass and glow
                 instructionText.style.display = 'block'; // Show instructions again
                 hideLoading(); // Make sure loading is hidden
                 clearBtn.style.display = 'none'; // Hide self
@@ -794,6 +843,7 @@ class App {
                 hideLoading(); // Hide loading first
                 resultImage.src = imageDataUrl;
                 resultContainer.style.display = 'block';
+                container.classList.add('result-shown'); // Remove glass and glow to frame result
                 instructionText.style.display = 'none'; // Hide instructions on result
                 clearBtn.style.display = 'flex'; // Show clear button
                 copyBtn.style.display = 'flex'; // Show copy button
