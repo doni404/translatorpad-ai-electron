@@ -1,6 +1,6 @@
 {
   "name": "transpad-ai",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "TransPad AI - Advanced screenshot translator for macOS",
   "main": "src/main/main.js",
   "scripts": {
@@ -81,7 +81,27 @@
     },
     "dmg": {
       "title": "TransPad AI Installer",
-      "icon": "assets/icons/transpad_512x512.png"
+      "icon": "assets/icons/transpad_512x512.png",
+      "background": "assets/installer/background.png",
+      "iconTextSize": 14,
+      "iconSize": 100,
+      "window": {
+        "width": 700,
+        "height": 460
+      },
+      "contents": [
+        {
+          "x": 200,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 500,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
