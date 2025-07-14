@@ -276,8 +276,7 @@ function setupEventListeners() {
 async function setupShortcutsPage() {
     const shortcutInputs = {
         'capture-translate': document.getElementById('capture-translate'),
-        'translate-paste': document.getElementById('translate-paste'),
-        'copy-last-translation': document.getElementById('copy-last-translation')
+        'translate-paste': document.getElementById('translate-paste')
     };
     const resetButton = document.getElementById('reset-shortcuts-button');
 

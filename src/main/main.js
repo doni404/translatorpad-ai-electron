@@ -25,16 +25,22 @@ class App {
     this.maxGalleryItems = 5; // Limit gallery to 5 items
     this.shortcutsRecordingActive = false; // Flag to prevent shortcuts during recording
     this.currentDragFilePath = null; // Track current drag temp file for cleanup
+    this.accessibilityPermissionAsked = false; // Track if we've asked for accessibility permissions
     
     this.init();
   }
 
   init() {
-    app.whenReady().then(() => {
-      this.createMainWindow();
-      this.registerShortcuts();
-      this.setupIpcHandlers();
-      // Don't check permissions on startup - only when actually needed
+    app.whenReady().then(async () => {
+      try {
+        this.createMainWindow();
+        this.setupIpcHandlers(); // Set up IPC handlers first
+        this.registerShortcuts(); // Then register shortcuts
+        console.log('✅ App initialization complete');
+        // Don't check permissions on startup - only when actually needed
+      } catch (error) {
+        console.error('❌ Error during app initialization:', error);
+      }
     });
 
     // Set a flag before quitting
@@ -191,24 +197,6 @@ class App {
             accelerator: shortcuts['translate-paste'],
             click: async () => {
               await this.translateAndReplaceClipboard();
-            }
-          },
-          {
-            label: 'Copy Last Translation',
-            accelerator: shortcuts['copy-last-translation'],
-            click: () => {
-              if (this.lastLupResult && this.lastLupResult.translatedText) {
-                clipboard.writeText(this.lastLupResult.translatedText);
-                
-                // Show a confirmation notification
-                if (Notification.isSupported()) {
-                  new Notification({
-                    title: 'Translation Copied',
-                    body: 'The last translated text has been copied to your clipboard.',
-                    silent: true
-                  }).show();
-                }
-              }
             }
           },
           { type: 'separator' },
@@ -896,6 +884,28 @@ class App {
             });
 
             document.addEventListener('keydown', (e) => {
+                // Handle Command+Shift+T for translating textarea content FIRST
+                if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'T') {
+                    console.log('🎯 Command+Shift+T detected in capture overlay');
+                    console.log('🔍 Text view active:', textViewBtn.classList.contains('active'));
+                    
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    
+                    // Only work if we're in text view (content doesn't matter since we read from clipboard)
+                    if (textViewBtn.classList.contains('active')) {
+                        console.log('✅ In text view, calling translateTextareaContent');
+                        translateTextareaContent();
+                    } else {
+                        console.log('⚠️ Not in text view, switching to text view first');
+                        textViewBtn.click();
+                        // Give a moment for the view to switch, then translate
+                        setTimeout(() => translateTextareaContent(), 100);
+                    }
+                    return false;
+                }
+                
                 // Check for Enter key and that we are not already showing a result or loading
                 if (e.key === 'Enter' && !container.classList.contains('result-shown') && loadingContainer.style.display !== 'flex') {
                     showLoading(); // Show loading immediately
@@ -1103,6 +1113,22 @@ class App {
                 translatedTextView.value = resultData.translatedText;
             });
 
+            // Listen for local translate shortcut from global handler
+            window.electronAPI.onHandleLocalTranslateShortcut(() => {
+                console.log('🎯 Received local translate shortcut message from main process');
+                
+                // Only work if we're in text view (content doesn't matter since we read from clipboard)
+                if (textViewBtn.classList.contains('active')) {
+                    console.log('✅ In text view, calling translateTextareaContent via IPC');
+                    translateTextareaContent();
+                } else {
+                    console.log('⚠️ Not in text view, switching to text view first');
+                    textViewBtn.click();
+                    // Give a moment for the view to switch, then translate
+                    setTimeout(() => translateTextareaContent(), 100);
+                }
+            });
+
             // Add listener to keep currentResult updated with edits
             translatedTextView.addEventListener('input', () => {
                 if (currentResult) {
@@ -1172,6 +1198,85 @@ class App {
                     console.error('Failed to paste text:', error);
                 }
             });
+
+            // Function to translate textarea content
+            async function translateTextareaContent() {
+                console.log('🔄 Translating clipboard content for textarea paste...');
+                
+                // Read from clipboard instead of using textarea content
+                let clipboardText;
+                try {
+                    const result = await window.electronAPI.readFromClipboard();
+                    if (!result.success || !result.text || !result.text.trim()) {
+                        console.log('⚠️ No text on clipboard to translate');
+                        return;
+                    }
+                    clipboardText = result.text.trim();
+                } catch (error) {
+                    console.error('❌ Failed to read clipboard:', error);
+                    return;
+                }
+                
+                console.log('📋 Clipboard text:', clipboardText.substring(0, 50) + '...');
+                
+                // Show visual feedback
+                const originalBorderStyle = translatedTextView.style.border;
+                translatedTextView.style.border = '2px solid #007bff';
+                
+                try {
+                    // Get current target language (should be available from the language indicator)
+                    const langIndicatorText = languageIndicator.textContent;
+                    let targetLang = 'ja'; // default
+                    if (langIndicatorText.includes('🇺🇸')) targetLang = 'en';
+                    else if (langIndicatorText.includes('🇮🇩')) targetLang = 'id';
+                    
+                    const result = await window.electronAPI.translateTextareaContent({
+                        text: clipboardText,
+                        targetLanguage: targetLang
+                    });
+                    
+                    if (result.success) {
+                        // Insert translated text at cursor position instead of replacing all
+                        const startPos = translatedTextView.selectionStart;
+                        const endPos = translatedTextView.selectionEnd;
+                        const currentText = translatedTextView.value;
+                        
+                        // Insert the translated text at cursor position
+                        const newText = currentText.substring(0, startPos) + result.translatedText + currentText.substring(endPos);
+                        translatedTextView.value = newText;
+                        
+                        // Position cursor after the inserted text
+                        const newCursorPos = startPos + result.translatedText.length;
+                        translatedTextView.setSelectionRange(newCursorPos, newCursorPos);
+                        translatedTextView.focus();
+                        
+                        // Update the stored result data
+                        if (currentResult) {
+                            currentResult.translatedText = newText;
+                        }
+                        console.log('✅ Clipboard text translated and pasted into textarea');
+                        
+                        // Show success feedback
+                        translatedTextView.style.border = '2px solid #28a745';
+                        setTimeout(() => {
+                            translatedTextView.style.border = originalBorderStyle;
+                        }, 1000);
+                    } else {
+                        console.error('Translation failed:', result.error);
+                        // Show error feedback
+                        translatedTextView.style.border = '2px solid #dc3545';
+                        setTimeout(() => {
+                            translatedTextView.style.border = originalBorderStyle;
+                        }, 1000);
+                    }
+                } catch (error) {
+                    console.error('Error translating clipboard for textarea:', error);
+                    translatedTextView.style.border = '2px solid #dc3545';
+                    setTimeout(() => {
+                        translatedTextView.style.border = originalBorderStyle;
+                    }, 1000);
+                }
+            }
 
             // ESC key to cancel (handled in the main keydown listener now)
         </script>
@@ -2168,42 +2273,44 @@ class App {
     globalShortcut.unregisterAll();
     
     const shortcuts = this.storeService.getShortcuts();
+    console.log('📋 Loading shortcuts from store:', shortcuts);
     
     // Register capture & translate shortcut
     try {
       if (shortcuts['capture-translate'] && shortcuts['capture-translate'].trim()) {
+        console.log('🔄 Registering capture-translate shortcut:', shortcuts['capture-translate']);
         const success = globalShortcut.register(shortcuts['capture-translate'], async () => {
-          // Prevent execution if shortcuts are being recorded
-          if (this.shortcutsRecordingActive) {
-            console.log('Shortcuts recording active, ignoring global shortcut');
-            return;
-          }
-          
-          const now = Date.now();
-          
-          // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
-          if (now - this.lastShortcutTime < 2000) {
-            console.log('Global shortcut on cooldown, ignoring');
-            return;
-          }
-          
-          // CRITICAL: Prevent duplicate shortcut executions
-          if (this.globalShortcutInProgress) {
-            console.log('Global shortcut in progress, ignoring');
-            return;
-          }
-          
-          // ADDITIONAL PROTECTION: Check if capture window already exists
-          if (this.captureWindow) {
-            console.log('Capture window exists, ignoring shortcut');
-            return;
-          }
-          
-          this.globalShortcutInProgress = true;
-          this.lastShortcutTime = now;
-          console.log('Global shortcut activated');
-          
           try {
+            // Prevent execution if shortcuts are being recorded
+            if (this.shortcutsRecordingActive) {
+              console.log('Shortcuts recording active, ignoring global shortcut');
+              return;
+            }
+            
+            const now = Date.now();
+            
+            // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
+            if (now - this.lastShortcutTime < 2000) {
+              console.log('Global shortcut on cooldown, ignoring');
+              return;
+            }
+            
+            // CRITICAL: Prevent duplicate shortcut executions
+            if (this.globalShortcutInProgress) {
+              console.log('Global shortcut in progress, ignoring');
+              return;
+            }
+            
+            // ADDITIONAL PROTECTION: Check if capture window already exists
+            if (this.captureWindow) {
+              console.log('Capture window exists, ignoring shortcut');
+              return;
+            }
+            
+            this.globalShortcutInProgress = true;
+            this.lastShortcutTime = now;
+            console.log('Global shortcut activated');
+            
             // Check permissions silently first. This is a quick operation.
             const hasPermission = await this.checkScreenPermissions(false);
             if (!hasPermission) {
@@ -2227,20 +2334,23 @@ class App {
             this.createCaptureOverlay(cursor);
 
           } catch (error) {
-            console.error('Error in smart capture sequence:', error);
+            console.error('Error in capture shortcut callback:', error);
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
               this.mainWindow.show();
               this.mainWindow.focus();
             }
             this.globalShortcutInProgress = false;
             this.lastShortcutTime = 0;
-            console.log('Global shortcut error, flag reset');
           }
         });
         
-        if (!success) {
-          console.error('Failed to register capture & translate shortcut:', shortcuts['capture-translate']);
+        if (success) {
+          console.log('✅ Capture-translate shortcut registered successfully');
+        } else {
+          console.error('❌ Failed to register capture & translate shortcut:', shortcuts['capture-translate']);
         }
+      } else {
+        console.log('⚠️ No capture-translate shortcut configured');
       }
     } catch (error) {
       console.error('Error registering capture-translate shortcut:', error);
@@ -2249,24 +2359,100 @@ class App {
     // Register global shortcut for clipboard translation
     try {
       if (shortcuts['translate-paste'] && shortcuts['translate-paste'].trim()) {
+        console.log('🔄 Registering translate-paste shortcut:', shortcuts['translate-paste']);
         const success = globalShortcut.register(shortcuts['translate-paste'], async () => {
-          // Prevent execution if shortcuts are being recorded
-          if (this.shortcutsRecordingActive) {
-            console.log('Shortcuts recording active, ignoring translate-paste shortcut');
-            return;
+          try {
+            // Prevent execution if shortcuts are being recorded
+            if (this.shortcutsRecordingActive) {
+              console.log('Shortcuts recording active, ignoring translate-paste shortcut');
+              return;
+            }
+            
+            // Check if capture window is focused - let it handle the shortcut locally
+            if (this.captureWindow && !this.captureWindow.isDestroyed() && this.captureWindow.isFocused()) {
+              console.log('🎯 Capture window is focused, letting it handle Command+Shift+T locally');
+              // Send a message to the capture window to handle the shortcut
+              this.captureWindow.webContents.send('handle-local-translate-shortcut');
+              return;
+            }
+            
+            console.log('🚀 Global "Translate & Paste Clipboard" shortcut activated!');
+            console.log('⏰ Timestamp:', new Date().toISOString());
+            console.log('🎯 About to call translateAndReplaceClipboard...');
+            
+            await this.translateAndReplaceClipboard();
+            console.log('✅ Translate and paste completed successfully');
+          } catch (error) {
+            console.error('❌ Error in translate-paste shortcut callback:', error);
           }
-          
-          console.log('Global "Translate & Paste Clipboard" shortcut activated.');
-          await this.translateAndReplaceClipboard();
         });
         
-        if (!success) {
-          console.error('Failed to register translate-paste shortcut:', shortcuts['translate-paste']);
+        if (success) {
+          console.log('✅ Translate-paste shortcut registered successfully');
+        } else {
+          console.error('❌ Failed to register translate-paste shortcut:', shortcuts['translate-paste']);
         }
+      } else {
+        console.log('⚠️ No translate-paste shortcut configured');
       }
     } catch (error) {
       console.error('Error registering translate-paste shortcut:', error);
     }
+
+    // Register copy last translation shortcut - DISABLED
+    // if (shortcuts['copy-last-translation'] && shortcuts['copy-last-translation'].trim()) {
+    //   console.log('🔄 Registering copy-last-translation shortcut:', shortcuts['copy-last-translation']);
+    //   const success = globalShortcut.register(shortcuts['copy-last-translation'], async () => {
+    //     try {
+    //       // Prevent execution if shortcuts are being recorded
+    //       if (this.shortcutsRecordingActive) {
+    //         console.log('Shortcuts recording active, ignoring copy-last-translation shortcut');
+    //         return;
+    //       }
+    //       
+    //       console.log('🚀 Global "Copy Last Translation" shortcut activated!');
+    //       if (this.lastLupResult && this.lastLupResult.translatedText) {
+    //         clipboard.writeText(this.lastLupResult.translatedText);
+    //         
+    //         // Show a confirmation notification
+    //         if (Notification.isSupported()) {
+    //           new Notification({
+    //             title: 'Translation Copied',
+    //             body: 'The last translated text has been copied to your clipboard.',
+    //             silent: true
+    //           }).show();
+    //         }
+    //         console.log('✅ Last translation copied to clipboard');
+    //       } else {
+    //         console.log('⚠️ No last translation available to copy');
+    //       }
+    //     } catch (error) {
+    //       console.error('❌ Error in copy-last-translation shortcut callback:', error);
+    //     }
+    //   });
+    //   
+    //   if (success) {
+    //     console.log('✅ Copy-last-translation shortcut registered successfully');
+    //   } else {
+    //     console.error('❌ Failed to register copy-last-translation shortcut:', shortcuts['copy-last-translation']);
+    //   }
+    // } catch (error) {
+    //   console.error('Error registering copy-last-translation shortcut:', error);
+    // }
+
+    // Log all currently registered shortcuts
+    try {
+      const registeredShortcuts = globalShortcut.getRegisteredAccelerators();
+      console.log('📋 All registered shortcuts:', registeredShortcuts);
+    } catch (error) {
+      console.log('⚠️ Could not get registered shortcuts (this is normal in some Electron versions)');
+    }
+    
+    console.log('🎯 Shortcut registration complete. Testing translate-paste shortcut...');
+    console.log('🔍 If Command+Shift+T is not working, check:');
+    console.log('   1. Are you pressing the right keys?');
+    console.log('   2. Is another app using this shortcut?');
+    console.log('   3. Is the app in focus/background?');
   }
 
 
@@ -2835,6 +3021,17 @@ class App {
       }
     });
 
+    ipcMain.handle('translate-textarea-content', async (event, { text, targetLanguage }) => {
+      try {
+        console.log('🔄 Translating textarea content:', text.substring(0, 50) + '...');
+        const translatedText = await this.translationService.translateText(text, targetLanguage);
+        console.log('✅ Textarea translation completed');
+        return { success: true, translatedText };
+      } catch (error) {
+        console.error('❌ Error translating textarea content:', error);
+        return { success: false, error: error.message };
+      }
+    });
 
   }
 
@@ -3242,51 +3439,145 @@ class App {
     }
   }
 
-  async translateAndReplaceClipboard() {
+  async checkAccessibilityPermissions() {
+    if (process.platform !== 'darwin') {
+      return true; // Non-macOS platforms don't need this
+    }
+
     try {
+      const { exec } = require('child_process');
+      
+      // Check if we have accessibility permissions by trying a simple keystroke test
+      return new Promise((resolve) => {
+        const testScript = `osascript -e 'tell application "System Events" to key code 53'`; // ESC key test
+        exec(testScript, { timeout: 1000 }, (error, stdout, stderr) => {
+          if (error && error.message.includes('1002')) {
+            console.log('❌ Accessibility permissions not granted');
+            resolve(false);
+          } else {
+            console.log('✅ Accessibility permissions available');
+            resolve(true);
+          }
+        });
+      });
+    } catch (error) {
+      console.error('Error checking accessibility permissions:', error);
+      return false;
+    }
+  }
+
+  async requestAccessibilityPermissions() {
+    try {
+      const result = await dialog.showMessageBox(this.mainWindow, {
+        type: 'info',
+        title: 'Accessibility Permission Required',
+        message: 'TransPad AI needs accessibility permission to paste translated text automatically.',
+        detail: 'Please grant permission in System Preferences > Security & Privacy > Privacy > Accessibility.\n\nAfter granting permission, the translate & paste shortcut will work seamlessly.',
+        buttons: ['Open System Preferences', 'Skip Auto-Paste'],
+        defaultId: 0
+      });
+      
+      if (result.response === 0) {
+        // Open System Preferences to Accessibility section
+        const { exec } = require('child_process');
+        exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"');
+      }
+      
+      return result.response === 0;
+    } catch (error) {
+      console.error('Error requesting accessibility permissions:', error);
+      return false;
+    }
+  }
+
+  async translateAndReplaceClipboard() {
+    console.log('🚀 translateAndReplaceClipboard function called');
+    
+    try {
+      console.log('📋 Reading clipboard content...');
       const text = clipboard.readText();
+      console.log('📋 Clipboard text length:', text ? text.length : 0);
+      console.log('📋 Clipboard text preview:', text ? text.substring(0, 50) + '...' : 'empty');
       
       if (!text || text.trim() === '') {
-        console.log('No text on clipboard to translate.');
+        console.log('❌ No text on clipboard to translate.');
         return;
       }
 
-      console.log(`Translating and pasting clipboard: "${text.substring(0, 30)}..."`);
+      console.log(`🔄 Translating clipboard text to ${this.targetLanguage}: "${text.substring(0, 30)}..."`);
 
       const translatedText = await this.translationService.translateText(text, this.targetLanguage);
+      console.log('✅ Translation completed:', translatedText ? translatedText.substring(0, 50) + '...' : 'empty');
       
       if (!translatedText) {
         throw new Error('Translation service failed to return a result.');
       }
 
-      // Temporarily hide our app to focus the previous one
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.hide();
-      }
-
       // Put the translated text on the clipboard
       clipboard.writeText(translatedText);
+      console.log('📋 Translated text written to clipboard');
       
-      // Give the OS a moment to switch focus
+      // Wait a moment for clipboard to be processed
       await new Promise(resolve => setTimeout(resolve, 200));
 
-      // Use AppleScript to simulate a paste command
-      const { exec } = require('child_process');
-      const script = `osascript -e 'tell application "System Events" to keystroke "v" using command down'`;
-      exec(script, (error) => {
-        if (error) {
-          console.error('Failed to execute paste command:', error);
-          // If pasting fails, at least the text is on the clipboard.
-          // Show the window again so the user isn't confused.
-          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-            this.mainWindow.show();
-          }
-        } else {
-          console.log('Paste command executed successfully.');
+      // Check accessibility permissions first
+      const hasAccessibility = await this.checkAccessibilityPermissions();
+      
+      if (!hasAccessibility) {
+        console.log('⚠️ No accessibility permissions - auto-paste disabled');
+        console.log('📋 Translated text is on clipboard, ready for manual paste with ⌘V');
+        
+        // For first-time users, show permission dialog (but only once per session)
+        if (!this.accessibilityPermissionAsked) {
+          this.accessibilityPermissionAsked = true;
+          setTimeout(() => {
+            this.requestAccessibilityPermissions();
+          }, 500); // Small delay to not interrupt the workflow
         }
-      });
+        
+        // Store result and exit - text is ready for manual paste
+        this.lastLupResult = {
+          id: `text-replace-${Date.now()}`,
+          success: true,
+          originalText: text,
+          translatedText: translatedText,
+          imagePath: null,
+          detectedLanguage: 'unknown',
+          targetLanguage: this.targetLanguage,
+          textBlocks: []
+        };
+        
+        console.log('🎉 Translation completed - text ready for manual paste');
+        return;
+      }
 
-      // Store this as the last result so it can be copied
+      // We have permissions, proceed with auto-paste
+      const { exec } = require('child_process');
+      
+      console.log('🎯 Attempting auto-paste...');
+      
+      try {
+        // Use simplified AppleScript approach since we have permissions
+        const pasteScript = `osascript -e 'delay 0.1' -e 'tell application "System Events" to key code 9 using command down'`;
+        
+        await new Promise((resolve, reject) => {
+          exec(pasteScript, { timeout: 2000 }, (error, stdout, stderr) => {
+            if (error) {
+              console.log('❌ Auto-paste failed:', error.message);
+              reject(error);
+            } else {
+              console.log('✅ Auto-paste completed successfully');
+              resolve();
+            }
+          });
+        });
+        
+      } catch (pasteError) {
+        console.log('⚠️ Auto-paste failed, text remains on clipboard for manual paste');
+        console.log('📋 Error details:', pasteError.message);
+      }
+
+      // Store this as the last result for future reference  
       this.lastLupResult = {
         id: `text-replace-${Date.now()}`,
         success: true,
@@ -3298,10 +3589,11 @@ class App {
         textBlocks: []
       };
 
-      console.log(`Clipboard replacement successful.`);
+      console.log('💾 Stored result for reference');
+      console.log('🎉 Clipboard translation process completed successfully');
 
     } catch (error) {
-      console.error('Error translating and pasting clipboard:', error);
+      console.error('❌ Error in translateAndReplaceClipboard:', error);
     }
   }
 }
