@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Image viewer operations
   openImageInNewWindow: (imageData) => ipcRenderer.invoke('open-image-in-new-window', imageData),
+  readFromClipboard: () => ipcRenderer.invoke('read-from-clipboard'),
   onUpdateImage: (callback) => {
     ipcRenderer.on('update-image', (event, imageData) => {
       callback(imageData);

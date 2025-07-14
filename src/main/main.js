@@ -37,6 +37,11 @@ class App {
       // Don't check permissions on startup - only when actually needed
     });
 
+    // Set a flag before quitting
+    app.on('before-quit', () => {
+      app.isQuitting = true;
+    });
+
     app.on('window-all-closed', () => {
       if (process.platform !== 'darwin') {
         app.quit();
@@ -46,6 +51,9 @@ class App {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         this.createMainWindow();
+      } else if (this.mainWindow) {
+        this.mainWindow.show();
+        this.mainWindow.focus();
       }
     });
   }
@@ -78,6 +86,16 @@ class App {
     if (isDev && process.argv.includes('--debug')) {
       this.mainWindow.webContents.openDevTools();
     }
+
+    this.mainWindow.on('close', (event) => {
+      // On macOS, prevent quitting when the window is closed and hide it instead
+      if (process.platform === 'darwin') {
+        if (!app.isQuitting) {
+          event.preventDefault();
+          this.mainWindow.hide();
+        }
+      }
+    });
 
     this.mainWindow.on('closed', () => {
       this.mainWindow = null;
@@ -1178,6 +1196,13 @@ class App {
       // Reset global shortcut flag when overlay is closed/cancelled
       this.globalShortcutInProgress = false;
       console.log('Capture overlay closed, flag reset');
+      
+      // After capture is closed, restore and focus the main window
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.show();
+        this.mainWindow.focus();
+        this.mainWindow.webContents.send('reset-to-home');
+      }
     });
   }
 
@@ -2147,7 +2172,7 @@ class App {
     // Register capture & translate shortcut
     try {
       if (shortcuts['capture-translate'] && shortcuts['capture-translate'].trim()) {
-        globalShortcut.register(shortcuts['capture-translate'], async () => {
+        const success = globalShortcut.register(shortcuts['capture-translate'], async () => {
           // Prevent execution if shortcuts are being recorded
           if (this.shortcutsRecordingActive) {
             console.log('Shortcuts recording active, ignoring global shortcut');
@@ -2212,29 +2237,38 @@ class App {
             console.log('Global shortcut error, flag reset');
           }
         });
+        
+        if (!success) {
+          console.error('Failed to register capture & translate shortcut:', shortcuts['capture-translate']);
+        }
       }
     } catch (error) {
-      console.error('Error registering shortcuts:', error);
+      console.error('Error registering capture-translate shortcut:', error);
     }
 
     // Register global shortcut for clipboard translation
     try {
       if (shortcuts['translate-paste'] && shortcuts['translate-paste'].trim()) {
-        globalShortcut.register(shortcuts['translate-paste'], async () => {
+        const success = globalShortcut.register(shortcuts['translate-paste'], async () => {
           // Prevent execution if shortcuts are being recorded
           if (this.shortcutsRecordingActive) {
-            console.log('Shortcuts recording active, ignoring global shortcut');
+            console.log('Shortcuts recording active, ignoring translate-paste shortcut');
             return;
           }
           
           console.log('Global "Translate & Paste Clipboard" shortcut activated.');
           await this.translateAndReplaceClipboard();
         });
+        
+        if (!success) {
+          console.error('Failed to register translate-paste shortcut:', shortcuts['translate-paste']);
+        }
       }
     } catch (error) {
       console.error('Error registering translate-paste shortcut:', error);
     }
   }
+
 
   setupIpcHandlers() {
     ipcMain.handle('start-capture', async () => {
@@ -2450,17 +2484,7 @@ class App {
     ipcMain.handle('close-capture-overlay', () => {
       if (this.captureWindow) {
         this.captureWindow.close();
-        this.captureWindow = null;
       }
-      // Restore the main window when the lup is closed
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.show();
-        this.mainWindow.focus();
-        // Tell the renderer to go back to the home screen
-        this.mainWindow.webContents.send('reset-to-home');
-      }
-      this.globalShortcutInProgress = false;
-      console.log('Capture overlay closed, flag reset');
     });
 
     ipcMain.handle('capture-area', async (event, bounds) => {
@@ -2810,6 +2834,8 @@ class App {
         return { success: false, error: error.message };
       }
     });
+
+
   }
 
   formatDateForFilename(date) {
@@ -3219,6 +3245,7 @@ class App {
   async translateAndReplaceClipboard() {
     try {
       const text = clipboard.readText();
+      
       if (!text || text.trim() === '') {
         console.log('No text on clipboard to translate.');
         if (Notification.isSupported()) {
@@ -3234,6 +3261,7 @@ class App {
       console.log(`Translating and pasting clipboard: "${text.substring(0, 30)}..."`);
 
       const translatedText = await this.translationService.translateText(text, this.targetLanguage);
+      
       if (!translatedText) {
         throw new Error('Translation service failed to return a result.');
       }
@@ -3262,8 +3290,6 @@ class App {
           }
         } else {
           console.log('Paste command executed successfully.');
-          // Optionally, briefly show and re-hide the window to show the notification,
-          // or just let it stay hidden. For now, we'll keep it hidden.
         }
       });
 

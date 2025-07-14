@@ -11,7 +11,7 @@ const schema = {
 			},
 			'translate-paste': {
 				type: 'string',
-				default: 'CommandOrControl+Shift+R'
+				default: 'CommandOrControl+Shift+T'
 			},
 			'copy-last-translation': {
 				type: 'string',
@@ -40,7 +40,7 @@ class StoreService {
     getDefaultShortcuts() {
         return {
             'capture-translate': 'CommandOrControl+Shift+S',
-            'translate-paste': 'CommandOrControl+Shift+R',
+            'translate-paste': 'CommandOrControl+Shift+T',
             'copy-last-translation': 'CommandOrControl+Shift+V'
         };
     }
