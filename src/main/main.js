@@ -30,6 +30,34 @@ class App {
     this.init();
   }
 
+  // Helper method to ensure proper main window and dock management
+  ensureMainWindowVisible() {
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      console.log('🔧 Ensuring main window is properly visible and focused');
+      
+      // Ensure dock icon is visible on macOS
+      if (process.platform === 'darwin') {
+        app.dock.show();
+      }
+      
+      // Restore window properly
+      this.mainWindow.show();
+      this.mainWindow.restore(); // In case it was minimized
+      this.mainWindow.focus();
+      this.mainWindow.moveTop(); // Bring to front
+      
+      // Temporarily set on top to ensure it comes to front, then reset
+      this.mainWindow.setAlwaysOnTop(true);
+      setTimeout(() => {
+        this.mainWindow.setAlwaysOnTop(false);
+      }, 100);
+      
+      console.log('✅ Main window visibility ensured');
+      return true;
+    }
+    return false;
+  }
+
   init() {
     app.whenReady().then(async () => {
       try {
@@ -55,11 +83,13 @@ class App {
     });
 
     app.on('activate', () => {
+      console.log('🚀 App activate event triggered');
       if (BrowserWindow.getAllWindows().length === 0) {
+        console.log('📱 No windows exist, creating main window');
         this.createMainWindow();
-      } else if (this.mainWindow) {
-        this.mainWindow.show();
-        this.mainWindow.focus();
+      } else {
+        this.ensureMainWindowVisible();
+        console.log('✅ Main window restored from dock');
       }
     });
   }
@@ -99,6 +129,9 @@ class App {
         if (!app.isQuitting) {
           event.preventDefault();
           this.mainWindow.hide();
+          // Ensure dock icon remains visible even when window is hidden
+          app.dock.show();
+          console.log('🏠 Main window hidden but dock icon kept visible');
         }
       }
     });
@@ -111,6 +144,9 @@ class App {
     const iconPath = path.join(__dirname, '../../assets/icons/transpad_512x512.png');
     if (process.platform === 'darwin') {
       app.dock.setIcon(iconPath);
+      // Ensure dock is always visible when main window is created
+      app.dock.show();
+      console.log('🎨 Dock icon set and made visible');
     }
   }
 
@@ -1293,6 +1329,8 @@ class App {
       
       // Send current target language to the capture window
       this.captureWindow.webContents.send('target-language-changed', this.targetLanguage);
+      
+      console.log('🎯 Capture overlay is ready and focused');
     });
 
     // Handle window close
@@ -1302,11 +1340,11 @@ class App {
       this.globalShortcutInProgress = false;
       console.log('Capture overlay closed, flag reset');
       
-      // After capture is closed, restore and focus the main window
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.show();
-        this.mainWindow.focus();
+      // After capture is closed, restore and focus the main window properly
+      if (this.ensureMainWindowVisible()) {
+        // Reset to home view
         this.mainWindow.webContents.send('reset-to-home');
+        console.log('✅ Main window restored and ready for interaction after capture');
       }
     });
   }
@@ -2647,23 +2685,37 @@ class App {
     });
 
     ipcMain.handle('open-in-app', () => {
-      // --- CORRECTED LOGIC ---
-      // This button's only job is to show the main window. History is already logged.
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        console.log('Bringing main window to front and showing last result.');
-        this.mainWindow.show();
-        this.mainWindow.focus();
-
-        // Also send the last result to be displayed in the modal
+      console.log('🎯 Open in app button clicked');
+      
+      if (this.ensureMainWindowVisible()) {
+        console.log('📋 Last result data:', this.lastLupResult ? 'Available' : 'Not available');
+        
+        // Send the last result to be displayed in the modal
         if (this.lastLupResult) {
+          console.log('📤 Sending capture-complete event to renderer with:', {
+            success: this.lastLupResult.success,
+            originalText: this.lastLupResult.originalText ? this.lastLupResult.originalText.substring(0, 50) + '...' : 'None',
+            translatedText: this.lastLupResult.translatedText ? this.lastLupResult.translatedText.substring(0, 50) + '...' : 'None'
+          });
+          
+          // Wait a moment for window to be ready, then send the result
+          setTimeout(() => {
             this.mainWindow.webContents.send('capture-complete', this.lastLupResult);
+            console.log('✅ Capture-complete event sent to main window');
+          }, 100);
+        } else {
+          console.warn('⚠️ No lastLupResult available to send');
         }
         
+        // Close capture window
         if (this.captureWindow) {
           this.captureWindow.close();
+          console.log('❌ Capture window closed');
         }
+        
+        console.log('✅ Open in app completed successfully');
       } else {
-        console.warn('Could not open in app: Main window is not available.');
+        console.error('❌ Could not open in app: Main window is not available.');
       }
     });
 
@@ -3017,6 +3069,28 @@ class App {
         return { success: true, text: text };
       } catch (error) {
         console.error('Error reading from clipboard:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('refresh-background-screenshot', async () => {
+      try {
+        console.log('🔄 Refreshing background screenshot...');
+        
+        if (!this.captureWindow) {
+          return { success: false, error: 'No capture window available' };
+        }
+        
+        const bounds = this.captureWindow.getBounds();
+        const activeDisplay = screen.getDisplayMatching(bounds);
+        
+        // Take a fresh screenshot of the background
+        const screenshot = await this.screenshotService.captureFullScreenBackground(activeDisplay);
+        
+        console.log('✅ Background screenshot refreshed');
+        return { success: true };
+      } catch (error) {
+        console.error('❌ Failed to refresh background screenshot:', error);
         return { success: false, error: error.message };
       }
     });
