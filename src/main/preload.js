@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extractAndTranslate: async (options) => ipcRenderer.invoke('extract-and-translate', options),
   getLanguages: async () => ipcRenderer.invoke('get-languages'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  translateTextareaContent: (data) => ipcRenderer.invoke('translate-textarea-content', data),
 
   // Shortcuts Management
   getShortcuts: () => ipcRenderer.invoke('get-shortcuts'),
@@ -69,6 +70,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Image viewer operations
   openImageInNewWindow: (imageData) => ipcRenderer.invoke('open-image-in-new-window', imageData),
+  readFromClipboard: () => ipcRenderer.invoke('read-from-clipboard'),
   onUpdateImage: (callback) => {
     ipcRenderer.on('update-image', (event, imageData) => {
       callback(imageData);
@@ -157,5 +159,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   onHideLoading: (callback) => {
     ipcRenderer.on('hide-loading', () => callback());
+  },
+
+  // Local translate shortcut handler
+  onHandleLocalTranslateShortcut: (callback) => {
+    ipcRenderer.on('handle-local-translate-shortcut', () => callback());
   }
 }); 

@@ -28,6 +28,12 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a href="#" class="nav-link" data-section="settings">
+                            <i class="fas fa-gear"></i>
+                            <span>Settings</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a href="#" class="nav-link" data-section="history">
                             <i class="fas fa-clock-rotate-left"></i>
                             <span>History</span>
@@ -37,12 +43,6 @@
                         <a href="#" class="nav-link" data-section="plans">
                             <i class="fas fa-crown"></i>
                             <span>Plans</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="#" class="nav-link" data-section="settings">
-                            <i class="fas fa-gear"></i>
-                            <span>Settings</span>
                         </a>
                     </li>
                 </ul>
@@ -78,9 +78,8 @@
                     </div>
                     
                     <div class="sidebar-app-info">
-                        <span class="app-version">Version 1.0.0</span>
-                        <span class="separator">•</span>
-                        <span>© 2025 GLODING, Inc.</span>
+                        <div class="app-version">Version 1.0.0</div>
+                        <div>© 2025 GLODING, Inc.</div>
                     </div>
                 </div>
             </div>
@@ -100,7 +99,7 @@
                         <div class="feature-card">
                             <div class="feature-icon">📸</div>
                             <h3>Capture</h3>
-                            <p>Take screenshots with area selection</p>
+                            <p>Screenshots with area selection</p>
                         </div>
                         <div class="feature-card">
                             <div class="feature-icon">🔍</div>
@@ -384,6 +383,7 @@
                                     <option value="low">Low</option>
                                 </select>
                             </div>
+                            <p class="setting-help-text">High quality means larger file sizes. Low quality results in smaller files.</p>
                         </div>
                         
                         <div class="settings-section">
@@ -397,10 +397,6 @@
                                 <input type="text" class="shortcut-input" id="translate-paste" readonly placeholder="Click to record">
                             </div>
                             <div class="setting-item">
-                                <label for="copy-last-translation">Copy Last Translation</label>
-                                <input type="text" class="shortcut-input" id="copy-last-translation" readonly placeholder="Click to record">
-                            </div>
-                            <div class="setting-item">
                                 <button type="button" id="reset-shortcuts-button" class="btn btn-secondary">Reset to Defaults</button>
                             </div>
                         </div>
@@ -411,7 +407,7 @@
                                 <label for="apiStatus">API Status</label>
                                 <div class="api-status" id="apiStatus">
                                     <span class="status-indicator warning"></span>
-                                    <span>Not configured</span>
+                                    <span class="api-status-text">Not configured</span>
                                 </div>
                             </div>
                             <p class="api-help">

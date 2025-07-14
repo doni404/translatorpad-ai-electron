@@ -79,13 +79,12 @@ class ScreenshotService {
     }
   }
 
-  async captureFullScreenBackground() {
+  async captureFullScreenBackground(activeDisplay) {
     try {
       console.log('Taking background screenshot without window focus...');
       
-      // Get all displays and use the primary one
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const { width, height } = primaryDisplay.bounds;
+      const display = activeDisplay || screen.getPrimaryDisplay();
+      const { width, height } = display.bounds;
       
       // Use a higher resolution for better quality
       const sources = await desktopCapturer.getSources({
@@ -98,8 +97,8 @@ class ScreenshotService {
         throw new Error('No screen sources found for background capture');
       }
 
-      // Find the primary display source
-      const source = sources.find(s => s.display_id === primaryDisplay.id.toString()) || sources[0];
+      // Find the source for the active display
+      const source = sources.find(s => s.display_id === display.id.toString()) || sources[0];
       
       console.log('Background capture source found:', {
         name: source.name,
@@ -252,7 +251,7 @@ class ScreenshotService {
     }
   }
 
-  async captureAreaFromExisting(bounds, existingScreenshotPath) {
+  async captureAreaFromExisting(bounds, existingScreenshotPath, activeDisplay) {
     try {
       // Validate bounds
       if (!bounds || typeof bounds !== 'object') {
@@ -285,15 +284,13 @@ class ScreenshotService {
       
       console.log('Processing area with bounds:', { x, y, width, height });
       
-      // Get display information
-      const { screen } = require('electron');
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const scaleFactor = primaryDisplay.scaleFactor || 1;
+      const display = activeDisplay || screen.getPrimaryDisplay();
+      const scaleFactor = display.scaleFactor || 1;
       
       console.log('Display info:', {
-        bounds: primaryDisplay.bounds,
+        bounds: display.bounds,
         scaleFactor: scaleFactor,
-        workArea: primaryDisplay.workArea
+        workArea: display.workArea
       });
       
       // Get existing screenshot dimensions
@@ -307,13 +304,17 @@ class ScreenshotService {
         filePath: existingScreenshotPath
       });
       
+      // The screenshot is of a single display, so coordinates must be made relative to that display
+      const relativeX = x - display.bounds.x;
+      const relativeY = y - display.bounds.y;
+      
       // Apply device pixel ratio scaling for Retina displays
       console.log('=== PRE-CAPTURED COORDINATE PROCESSING ===');
       console.log('Input coordinates (logical pixels):', { x, y, width, height });
       
       // Apply device pixel ratio scaling for Retina displays
-      let finalX = Math.round(x * scaleFactor);
-      let finalY = Math.round(y * scaleFactor);
+      let finalX = Math.round(relativeX * scaleFactor);
+      let finalY = Math.round(relativeY * scaleFactor);
       let finalWidth = Math.round(width * scaleFactor);
       let finalHeight = Math.round(height * scaleFactor);
       
@@ -380,20 +381,20 @@ class ScreenshotService {
   }
 
   // CORE TEXT REPLACEMENT METHOD - Paragraph-by-paragraph translation with precise overlays
-  async createImageWithTranslation(originalImagePath, originalText, textBlocks, targetLanguage = null) {
+  async createImageWithTranslation(originalImagePath, originalText, textBlocks, targetLanguage = null, quality = 'medium') {
     try {
-      console.log('🖼️ Creating new image with translated text (Advanced Replacement)...');
+      console.log(`🖼️ Creating new image with translated text (Quality: ${quality})...`);
 
       let detectedLanguage = 'unknown';
       if (originalText && originalText.trim()) {
         try {
-            const detectionResult = await this.translationService.detectLanguage(originalText);
+          const detectionResult = await this.translationService.detectLanguage(originalText);
             if (detectionResult) detectedLanguage = detectionResult.language || 'unknown';
         } catch (e) {
-            console.warn('Could not detect source language', e.message);
+          console.warn('Could not detect source language', e.message);
         }
       }
-
+      
       const paragraphs = this.extractParagraphsFromTextBlocks(textBlocks, originalImagePath);
       const compositeOverlays = [];
       let fullTranslatedText = '';
@@ -404,8 +405,8 @@ class ScreenshotService {
         try {
           const translatedText = await this.translationService.translateText(paragraph.text, targetLanguage);
           if (!translatedText) continue;
-
-          fullTranslatedText += translatedText + '\n';
+          
+            fullTranslatedText += translatedText + '\n';
           const { minX, minY, maxX, maxY } = paragraph.boundingBox;
           const width = maxX - minX;
           const height = maxY - minY;
@@ -442,7 +443,16 @@ class ScreenshotService {
       const timestamp = Date.now();
       const translatedImagePath = path.join(this.tempDir, `translated_${timestamp}.png`);
       
-      await sharp(originalImagePath).composite(compositeOverlays).toFile(translatedImagePath);
+      const qualitySettings = {
+          'high': { quality: 95 },
+          'medium': { quality: 80 },
+          'low': { quality: 60 }
+      };
+      
+      await sharp(originalImagePath)
+        .composite(compositeOverlays)
+        .png(qualitySettings[quality] || qualitySettings.medium)
+        .toFile(translatedImagePath);
 
       console.log('✅ Translated image created:', translatedImagePath);
       
@@ -524,7 +534,7 @@ class ScreenshotService {
         const aY = a.boundingBox.minY;
         const bY = b.boundingBox.minY;
         if (Math.abs(aY - bY) <= 20) return a.boundingBox.minX - b.boundingBox.minX;
-        return aY - bY;
+      return aY - bY;
     });
     
     console.log(`📊 Extracted ${paragraphs.length} paragraphs.`);
@@ -536,10 +546,10 @@ class ScreenshotService {
     const words = text.split(' ');
     const lines = [];
     let currentLine = '';
-
+    
     for (const word of words) {
         const testLine = currentLine ? `${currentLine} ${word}` : word;
-
+      
         // Create a temporary SVG to measure the text width accurately
         const tempSvg = `<svg><text font-family="-apple-system, sans-serif" font-size="${fontSize}px">${this.escapeXml(testLine)}</text></svg>`;
         const { info } = await sharp(Buffer.from(tempSvg)).toBuffer({ resolveWithObject: true });
@@ -550,7 +560,7 @@ class ScreenshotService {
             if (currentLine) lines.push(currentLine);
             currentLine = word;
         }
-    }
+      }
     if (currentLine) lines.push(currentLine);
 
     const lineHeight = fontSize * 1.2;
@@ -562,7 +572,7 @@ class ScreenshotService {
         const escapedLine = this.escapeXml(line);
         return `<text x="5" y="${y}" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="${fontSize}px" fill="${textColor}" text-anchor="start" dominant-baseline="middle">${escapedLine}</text>`;
     }).join('');
-
+    
     return `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">${textElements}</svg>`;
   }
 
@@ -571,12 +581,12 @@ class ScreenshotService {
       const { minX, minY, maxX, maxY } = boundingBox;
       const extractWidth = Math.max(1, maxX - minX);
       const extractHeight = Math.max(1, maxY - minY);
-
+      
       const { data } = await sharp(imagePath)
         .extract({ left: minX, top: minY, width: extractWidth, height: extractHeight })
         .blur(5)
         .toBuffer({ resolveWithObject: true });
-
+      
       const centerX = Math.floor(extractWidth / 2);
       const centerY = Math.floor(extractHeight / 2);
       const pixelIndex = (centerY * extractWidth + (channels || 4)) * centerX;
@@ -586,7 +596,7 @@ class ScreenshotService {
       const b = data[pixelIndex + 2];
       
       return `rgb(${r},${g},${b})`;
-
+      
     } catch (error) {
       console.log('📍 Background sampling failed, using neutral background:', error.message);
       return 'rgb(248, 248, 248)';

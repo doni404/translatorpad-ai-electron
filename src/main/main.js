@@ -25,16 +25,27 @@ class App {
     this.maxGalleryItems = 5; // Limit gallery to 5 items
     this.shortcutsRecordingActive = false; // Flag to prevent shortcuts during recording
     this.currentDragFilePath = null; // Track current drag temp file for cleanup
+    this.accessibilityPermissionAsked = false; // Track if we've asked for accessibility permissions
     
     this.init();
   }
 
   init() {
-    app.whenReady().then(() => {
-      this.createMainWindow();
-      this.registerShortcuts();
-      this.setupIpcHandlers();
-      // Don't check permissions on startup - only when actually needed
+    app.whenReady().then(async () => {
+      try {
+        this.createMainWindow();
+        this.setupIpcHandlers(); // Set up IPC handlers first
+        this.registerShortcuts(); // Then register shortcuts
+        console.log('✅ App initialization complete');
+        // Don't check permissions on startup - only when actually needed
+      } catch (error) {
+        console.error('❌ Error during app initialization:', error);
+      }
+    });
+
+    // Set a flag before quitting
+    app.on('before-quit', () => {
+      app.isQuitting = true;
     });
 
     app.on('window-all-closed', () => {
@@ -46,16 +57,19 @@ class App {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         this.createMainWindow();
+      } else if (this.mainWindow) {
+        this.mainWindow.show();
+        this.mainWindow.focus();
       }
     });
   }
 
   createMainWindow() {
     this.mainWindow = new BrowserWindow({
-      width: 1000,
-      height: 700,
-      minWidth: 1000,
-      minHeight: 700,
+      width: 800,
+      height: 600,
+      minWidth: 800,
+      minHeight: 600,
       title: 'TransPad AI',
       titleBarStyle: 'default',
       movable: true,
@@ -78,6 +92,16 @@ class App {
     if (isDev && process.argv.includes('--debug')) {
       this.mainWindow.webContents.openDevTools();
     }
+
+    this.mainWindow.on('close', (event) => {
+      // On macOS, prevent quitting when the window is closed and hide it instead
+      if (process.platform === 'darwin') {
+        if (!app.isQuitting) {
+          event.preventDefault();
+          this.mainWindow.hide();
+        }
+      }
+    });
 
     this.mainWindow.on('closed', () => {
       this.mainWindow = null;
@@ -145,6 +169,18 @@ class App {
         ]
       },
       {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' }
+        ]
+      },
+      {
         label: 'Translation',
         submenu: [
           {
@@ -161,24 +197,6 @@ class App {
             accelerator: shortcuts['translate-paste'],
             click: async () => {
               await this.translateAndReplaceClipboard();
-            }
-          },
-          {
-            label: 'Copy Last Translation',
-            accelerator: shortcuts['copy-last-translation'],
-            click: () => {
-              if (this.lastLupResult && this.lastLupResult.translatedText) {
-                clipboard.writeText(this.lastLupResult.translatedText);
-                
-                // Show a confirmation notification
-                if (Notification.isSupported()) {
-                  new Notification({
-                    title: 'Translation Copied',
-                    body: 'The last translated text has been copied to your clipboard.',
-                    silent: true
-                  }).show();
-                }
-              }
             }
           },
           { type: 'separator' },
@@ -306,15 +324,14 @@ class App {
     }
   }
 
-  createCaptureOverlay() {
+  createCaptureOverlay(cursorPosition = null) {
     // ABSOLUTE PREVENTION: If overlay already exists, do not create another
     if (this.captureWindow) {
       console.log('❌ Capture overlay (Lup) already exists, preventing duplicate');
       return;
     }
     
-    // Create the movable, resizable "Lup" window
-    this.captureWindow = new BrowserWindow({
+    const winOptions = {
       width: 500,
       height: 400,
       transparent: true,
@@ -329,9 +346,19 @@ class App {
         contextIsolation: true,
         preload: path.join(__dirname, 'preload.js')
       }
-    });
+    };
 
-    this.captureWindow.center();
+    if (cursorPosition) {
+      winOptions.x = Math.round(cursorPosition.x - winOptions.width / 2);
+      winOptions.y = Math.round(cursorPosition.y - winOptions.height / 2);
+    }
+    
+    // Create the movable, resizable "Lup" window
+    this.captureWindow = new BrowserWindow(winOptions);
+
+    if (!cursorPosition) {
+      this.captureWindow.center();
+    }
 
     const lupHtml = `
     <!DOCTYPE html>
@@ -354,21 +381,100 @@ class App {
                 position: absolute;
                 top: 0; left: 0; right: 0; bottom: 0;
                 box-sizing: border-box;
-                border-radius: 12px;
-                -webkit-app-region: drag; /* The entire window is draggable again */
-                cursor: grab; /* Change cursor to indicate movement */
-                
-                /* Visual style */
-                background: rgba(180, 180, 180, 0.2);
-                backdrop-filter: blur(12px);
-                border: 1px solid rgba(255, 255, 255, 0.75);
-                box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.85), 0 8px 35px rgba(0,0,0,0.3);
-                
+                border-radius: 20px;
+                -webkit-app-region: drag;
+                cursor: grab;
+
+                /* Inner Glow effect from sample */
+                background: rgba(255, 255, 255, 0.05);
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                /* animation: glow-inset 2.5s ease-in-out infinite; MOVED to ::before */
+
                 display: flex;
                 justify-content: center;
                 align-items: center;
-                flex-direction: column; /* Center content vertically */
+                flex-direction: column;
+                transition: all 0.3s ease-in-out;
             }
+
+            #top-left-controls {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                z-index: 100;
+                -webkit-app-region: no-drag;
+            }
+
+            #view-switch {
+                display: flex;
+                background: rgba(0,0,0,0.4);
+                border-radius: 12px;
+                border: 1px solid rgba(255,255,255,0.1);
+                -webkit-app-region: no-drag;
+            }
+            .view-btn {
+                background: transparent;
+                border: none;
+                color: rgba(255,255,255,0.6);
+                padding: 4px 8px;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                font-size: 12px;
+            }
+            .view-btn:hover {
+                color: white;
+            }
+            .view-btn.active {
+                background: rgba(255,255,255,0.15);
+                color: white;
+                border-radius: 10px;
+            }
+            
+            #container.result-shown {
+                /* When any result is shown, make the glass pane transparent */
+                background: transparent;
+                backdrop-filter: none;
+                border: none;
+            }
+
+            /* The glow layer */
+            #container::before {
+                content: '';
+                position: absolute;
+                inset: 0;
+                border-radius: 20px; /* Match container */
+                animation: glow-inset 2.5s ease-in-out infinite;
+                /* Bring the glow layer to the front for ALL results */
+                z-index: -1; /* Behind the glass by default */
+                pointer-events: none; /* Make it click-through */
+                transition: z-index 0.1s step-end;
+            }
+            
+            #container.result-shown::before {
+                z-index: 10; /* Bring the glow in front of the result image (z-index 5) */
+            }
+            
+            @keyframes glow-inset {
+                0%, 100% {
+                    box-shadow:
+                        inset 0 5px 8px rgba(255, 89, 172, 0.6),   /* Top - Pink */
+                        inset 0 -5px 8px rgba(162, 89, 255, 0.6),  /* Bottom - Purple */
+                        inset 5px 0 8px rgba(255, 157, 89, 0.6),   /* Left - Orange */
+                        inset -5px 0 8px rgba(0, 255, 255, 0.6);   /* Right - Cyan */
+                }
+                50% {
+                    box-shadow:
+                        inset 0 6px 12px rgba(162, 89, 255, 0.6),  /* Top - Purple */
+                        inset 0 -6px 12px rgba(0, 255, 255, 0.6),   /* Bottom - Cyan */
+                        inset 6px 0 12px rgba(255, 89, 172, 0.6),   /* Left - Pink */
+                        inset -6px 0 12px rgba(255, 157, 89, 0.6);  /* Right - Orange */
+                }
+            }
+            
             #drag-handle {
                 position: absolute;
                 top: 0;
@@ -405,11 +511,14 @@ class App {
             .loading-spinner {
                 width: 40px;
                 height: 40px;
-                border: 3px solid rgba(255, 255, 255, 0.3);
-                border-top: 3px solid #ffffff;
                 border-radius: 50%;
-                animation: spin 1s linear infinite;
+                /* Softer, pastel-like gradient */
+                background: conic-gradient(from 0deg, #ffc1e3, #d6bfff, #b3edff, #ffdfb3, #ffc1e3);
+                /* Slower and smoother animation */
+                animation: spin 1.8s linear infinite;
                 margin-bottom: 15px;
+                -webkit-mask: radial-gradient(farthest-side, #0000 calc(100% - 4px), #000 0);
+                mask: radial-gradient(farthest-side, #0000 calc(100% - 4px), #000 0);
             }
             @keyframes spin {
                 0% { transform: rotate(0deg); }
@@ -441,8 +550,12 @@ class App {
                  position: absolute;
                  top: 1px; left: 1px; right: 1px; bottom: 1px; /* Inset within border */
                  display: none; /* Hidden by default */
-                 border-radius: 11px;
+                 border-radius: 18px; /* Fit inside the container's radius */
                  overflow: hidden;
+                 z-index: 5; /* Sit below the glow overlay */
+            }
+            #container.result-shown #result-container {
+                display: block;
             }
             #resultImage {
                 width: 100%;
@@ -450,17 +563,25 @@ class App {
                 object-fit: cover;
             }
             #language-indicator {
-                position: absolute;
-                top: 10px;
-                left: 10px;
-                background: rgba(0,0,0,0.7);
-                color: white;
-                padding: 4px 8px;
+                background: rgba(0,0,0,0.4); /* Match other buttons */
+                color: rgba(255,255,255,0.8);
+                padding: 2px 8px; /* Match view-btn */
                 border-radius: 12px;
-                font-size: 12px;
-                font-weight: 600;
+                font-size: 12px; /* Match view-btn */
+                font-weight: 500;
                 -webkit-app-region: no-drag;
-                z-index: 10;
+                border: 1px solid rgba(255,255,255,0.1);
+                cursor: pointer;
+                transition: all 0.2s ease;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            #language-indicator .flag {
+                font-size: 14px;
+            }
+            #language-indicator:hover {
+                background: rgba(0,0,0,0.6);
             }
             #controls {
                 position: absolute;
@@ -469,6 +590,7 @@ class App {
                 display: flex;
                 gap: 8px;
                 -webkit-app-region: no-drag;
+                z-index: 100; /* Ensure controls are on top of the glow */
             }
             .btn {
                 background: rgba(0,0,0,0.4); /* Default visible background */
@@ -522,6 +644,7 @@ class App {
                 top: 12px;
                 right: 12px;
                 -webkit-app-region: no-drag;
+                z-index: 100; /* Ensure close button is on top of the glow */
             }
             
             /* Copy dropdown positioned outside the Lup */
@@ -578,11 +701,97 @@ class App {
             .copy-option:not(:last-child) {
                 border-bottom: 1px solid rgba(255,255,255,0.1);
             }
+            #text-result-container {
+                display: none;
+                position: absolute;
+                inset: 0; /* Let it fill the container */
+                background: white;
+                border-radius: 20px; /* Match container */
+                overflow: hidden; /* Hide scrollbar overflow from container */
+                z-index: 5; /* Sit below the glow overlay */
+                box-sizing: border-box;
+                padding: 0; /* Remove padding to allow textarea to fill it */
+            }
+            #text-result-container textarea {
+                width: 100%;
+                height: 100%;
+                border: none;
+                border-radius: 20px; /* Match container */
+                padding: 15px; /* Add padding inside the text area */
+                box-sizing: border-box;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+                background-color: white;
+                resize: none;
+                color: #222;
+                -webkit-app-region: no-drag; /* CRITICAL: Make textarea interactive */
+            }
+            #text-result-container textarea:focus {
+                outline: none;
+            }
+            #language-indicator:hover {
+                background: rgba(0,0,0,0.6);
+            }
+            #language-dropdown {
+                position: absolute;
+                top: 50px; /* Position below the indicator */
+                left: 10px;
+                background: rgba(0,0,0,0.85);
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 12px;
+                min-width: 180px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                display: none;
+                flex-direction: column;
+                z-index: 1000;
+                -webkit-app-region: no-drag;
+            }
+            .lang-option {
+                padding: 8px 12px;
+                color: white;
+                font-size: 12px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.2s ease;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                border: none;
+                background: transparent;
+                text-align: left;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                white-space: nowrap;
+            }
+            .lang-option:hover {
+                background: rgba(255,255,255,0.15);
+            }
+            .lang-option:not(:last-child) {
+                border-bottom: 1px solid rgba(255,255,255,0.1);
+            }
+            #controls {
+                position: absolute;
+                bottom: 15px; /* Moved to bottom */
+                right: 15px;
+                display: flex;
+                gap: 8px;
+                -webkit-app-region: no-drag;
+                z-index: 100; /* Ensure controls are on top of the glow */
+            }
         </style>
     </head>
     <body>
         <div id="container">
-            <div id="language-indicator">Any → English</div>
+            <div id="top-left-controls">
+                <div id="language-indicator" title="Change Language">
+                    Any → <span class="flag">🇯🇵</span>
+                </div>
+                <div id="view-switch">
+                    <button id="image-view-btn" class="view-btn active" title="Show Image"><i class="fas fa-image"></i></button>
+                    <button id="text-view-btn" class="view-btn" title="Show Text"><i class="fas fa-align-left"></i></button>
+                </div>
+            </div>
             <div id="instruction-text">Press Enter to Capture & Translate</div>
             <div id="loading-container">
                 <div class="loading-spinner"></div>
@@ -592,12 +801,15 @@ class App {
             <div id="result-container">
                  <img id="resultImage" />
             </div>
+            <div id="text-result-container">
+                <textarea id="translated-text-view"></textarea>
+            </div>
         </div>
 
         <!-- Controls are separate now -->
         <div id="controls">
             <button id="clearBtn" class="btn" style="display: none;"><i class="fas fa-sync-alt"></i><span class="tooltip">Clear</span></button>
-            <button id="copyBtn" class="btn" style="display: none;"><i class="fas fa-copy"></i><span class="tooltip">Copy</span></button>
+            <button id="copyBtn" class="btn" style="display: none;"><span class="btn-icon"><i class="fas fa-copy"></i></span><span class="tooltip">Copy</span></button>
             <button id="openInAppBtn" class="btn" style="display: none;"><i class="fas fa-arrow-up-right-from-square"></i><span class="tooltip">Go App</span></button>
         </div>
         <button id="closeBtn" class="btn"><i class="fas fa-times"></i><span class="tooltip tooltip-bottom">Close</span></button>
@@ -608,6 +820,12 @@ class App {
             <button class="copy-option" id="copyTranslatedImage">🖼️ Copy Translated Image</button>
             <button class="copy-option" id="copyOriginalText">📄 Copy Original Text</button>
             <button class="copy-option" id="copyTranslatedText">📝 Copy Translated Text</button>
+        </div>
+
+        <div id="language-dropdown">
+            <button class="lang-option" data-lang="ja">🇯🇵 Japanese</button>
+            <button class="lang-option" data-lang="en">🇺🇸 English</button>
+            <button class="lang-option" data-lang="id">🇮🇩 Indonesian</button>
         </div>
 
         <script>
@@ -624,17 +842,22 @@ class App {
             const resultContainer = document.getElementById('result-container');
             const resultImage = document.getElementById('resultImage');
             const languageIndicator = document.getElementById('language-indicator');
+            const languageDropdown = document.getElementById('language-dropdown');
             const instructionText = document.getElementById('instruction-text');
             const loadingContainer = document.getElementById('loading-container');
+            const imageViewBtn = document.getElementById('image-view-btn');
+            const textViewBtn = document.getElementById('text-view-btn');
+            const textResultContainer = document.getElementById('text-result-container');
+            const translatedTextView = document.getElementById('translated-text-view');
 
             // Store the current result data for copying
             let currentResult = null;
 
             // Language display mapping
-            const languageLabels = {
-                'ja': 'Any → Japanese',
-                'en': 'Any → English',
-                'id': 'Any → Indonesian'
+            const languageMap = {
+                'ja': { name: 'Japanese', flag: '🇯🇵' },
+                'en': { name: 'English', flag: '🇺🇸' },
+                'id': { name: 'Indonesian', flag: '🇮🇩' }
             };
 
             // Function to show loading state
@@ -642,6 +865,7 @@ class App {
                 instructionText.style.display = 'none';
                 loadingContainer.style.display = 'flex';
                 resultContainer.style.display = 'none';
+                textResultContainer.style.display = 'none';
             }
 
             // Function to hide loading state
@@ -651,12 +875,39 @@ class App {
 
             // Update language indicator when target language changes
             window.electronAPI.onTargetLanguageChanged((language) => {
-                languageIndicator.textContent = languageLabels[language] || 'Any → English';
+                const langInfo = languageMap[language];
+                if (langInfo) {
+                    languageIndicator.innerHTML = 'Any → <span class="flag">' + langInfo.flag + '</span>';
+                } else {
+                    languageIndicator.innerHTML = 'Any → <span class="flag">❔</span>';
+                }
             });
 
             document.addEventListener('keydown', (e) => {
+                // Handle Command+Shift+T for translating textarea content FIRST
+                if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'T') {
+                    console.log('🎯 Command+Shift+T detected in capture overlay');
+                    console.log('🔍 Text view active:', textViewBtn.classList.contains('active'));
+                    
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    
+                    // Only work if we're in text view (content doesn't matter since we read from clipboard)
+                    if (textViewBtn.classList.contains('active')) {
+                        console.log('✅ In text view, calling translateTextareaContent');
+                        translateTextareaContent();
+                    } else {
+                        console.log('⚠️ Not in text view, switching to text view first');
+                        textViewBtn.click();
+                        // Give a moment for the view to switch, then translate
+                        setTimeout(() => translateTextareaContent(), 100);
+                    }
+                    return false;
+                }
+                
                 // Check for Enter key and that we are not already showing a result or loading
-                if (e.key === 'Enter' && resultContainer.style.display !== 'block' && loadingContainer.style.display !== 'flex') {
+                if (e.key === 'Enter' && !container.classList.contains('result-shown') && loadingContainer.style.display !== 'flex') {
                     showLoading(); // Show loading immediately
                     window.electronAPI.captureLupArea();
                 }
@@ -673,6 +924,8 @@ class App {
 
             clearBtn.addEventListener('click', () => {
                 resultContainer.style.display = 'none'; // Hide image
+                textResultContainer.style.display = 'none'; // Hide text view
+                container.classList.remove('result-shown'); // Restore glass and glow
                 instructionText.style.display = 'block'; // Show instructions again
                 hideLoading(); // Make sure loading is hidden
                 clearBtn.style.display = 'none'; // Hide self
@@ -686,10 +939,22 @@ class App {
                 window.electronAPI.openInApp();
             });
 
-            // Copy button dropdown functionality
-            copyBtn.addEventListener('click', (e) => {
+            // Copy button functionality
+            copyBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                if (currentResult) {
+                if (!currentResult) return;
+
+                if (textViewBtn.classList.contains('active')) {
+                    // In text view, copy the content of the textarea directly
+                    try {
+                        await window.electronAPI.copyAsText(translatedTextView.value);
+                        showCopyFeedback(true, '📝');
+                    } catch (error) {
+                        console.error('Failed to copy translated text from textarea:', error);
+                        showCopyFeedback(false, '📝');
+                    }
+                } else {
+                    // In image view, toggle the dropdown
                     const isVisible = copyDropdown.style.display === 'flex';
                     copyDropdown.style.display = isVisible ? 'none' : 'flex';
                 }
@@ -761,31 +1026,69 @@ class App {
 
             // Helper function for copy feedback
             function showCopyFeedback(success, icon) {
+                const iconContainer = copyBtn.querySelector('.btn-icon');
+                if (!iconContainer) return;
+
+                const originalIconHTML = iconContainer.innerHTML; // Store original icon HTML
+
                 if (success) {
                     copyBtn.style.background = 'rgba(34, 197, 94, 0.7)';
-                    copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                    iconContainer.innerHTML = '<i class="fas fa-check"></i>';
                 } else {
                     copyBtn.style.background = 'rgba(239, 68, 68, 0.7)';
-                    copyBtn.innerHTML = '<i class="fas fa-times"></i>';
+                    iconContainer.innerHTML = '<i class="fas fa-times"></i>';
                 }
                 
                 setTimeout(() => {
                     copyBtn.style.background = 'rgba(0,0,0,0.4)';
-                    copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                    iconContainer.innerHTML = originalIconHTML; // Restore original icon
                 }, 1500);
             }
 
             // Close dropdown when clicking elsewhere
-            document.addEventListener('click', () => {
+            document.addEventListener('click', (e) => {
+                // Hide copy dropdown if clicking outside of it
+                if (!copyBtn.contains(e.target) && !copyDropdown.contains(e.target)) {
+                    copyDropdown.style.display = 'none';
+                }
+                // Hide language dropdown if clicking outside of it
+                if (!languageIndicator.contains(e.target) && !languageDropdown.contains(e.target)) {
+                    languageDropdown.style.display = 'none';
+                }
+            });
+
+            // --- Language Selector Logic ---
+            languageIndicator.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isVisible = languageDropdown.style.display === 'flex';
+                languageDropdown.style.display = isVisible ? 'none' : 'flex';
+                // Hide copy dropdown if it's open
                 copyDropdown.style.display = 'none';
+            });
+
+            languageDropdown.querySelectorAll('.lang-option').forEach(button => {
+                button.addEventListener('click', () => {
+                    const lang = button.getAttribute('data-lang');
+                    window.electronAPI.setTargetLanguage(lang);
+                    languageDropdown.style.display = 'none'; // Hide after selection
+                });
             });
 
             // Listen for the translated image from main process
             window.electronAPI.onLupResult((imageDataUrl) => {
                 hideLoading(); // Hide loading first
                 resultImage.src = imageDataUrl;
-                resultContainer.style.display = 'block';
-                instructionText.style.display = 'none'; // Hide instructions on result
+                container.classList.add('result-shown');
+                
+                // Show the correct view based on the active button
+                if (imageViewBtn.classList.contains('active')) {
+                    textResultContainer.style.display = 'none';
+                    resultContainer.style.display = 'block';
+                } else {
+                    resultContainer.style.display = 'none';
+                    textResultContainer.style.display = 'flex';
+                }
+
                 clearBtn.style.display = 'flex'; // Show clear button
                 copyBtn.style.display = 'flex'; // Show copy button
                 openInAppBtn.style.display = 'flex'; // Show open in app button
@@ -806,6 +1109,31 @@ class App {
                     currentResult.detectedLanguage = resultData.detectedLanguage;
                     currentResult.targetLanguage = resultData.targetLanguage;
                 }
+                // Also update the text view
+                translatedTextView.value = resultData.translatedText;
+            });
+
+            // Listen for local translate shortcut from global handler
+            window.electronAPI.onHandleLocalTranslateShortcut(() => {
+                console.log('🎯 Received local translate shortcut message from main process');
+                
+                // Only work if we're in text view (content doesn't matter since we read from clipboard)
+                if (textViewBtn.classList.contains('active')) {
+                    console.log('✅ In text view, calling translateTextareaContent via IPC');
+                    translateTextareaContent();
+                } else {
+                    console.log('⚠️ Not in text view, switching to text view first');
+                    textViewBtn.click();
+                    // Give a moment for the view to switch, then translate
+                    setTimeout(() => translateTextareaContent(), 100);
+                }
+            });
+
+            // Add listener to keep currentResult updated with edits
+            translatedTextView.addEventListener('input', () => {
+                if (currentResult) {
+                    currentResult.translatedText = translatedTextView.value;
+                }
             });
 
             // Listen for original image data
@@ -822,6 +1150,133 @@ class App {
                     loadingStepsElement.textContent = stepText;
                 }
             });
+
+            // --- View Switcher Logic ---
+            imageViewBtn.addEventListener('click', () => {
+                if (!imageViewBtn.classList.contains('active')) {
+                    imageViewBtn.classList.add('active');
+                    textViewBtn.classList.remove('active');
+
+                    // Update copy button tooltip and ensure dropdown is hidden
+                    copyBtn.querySelector('.tooltip').textContent = 'Copy';
+                    copyDropdown.style.display = 'none';
+
+                    // Only switch views if a result is already shown
+                    if (container.classList.contains('result-shown')) {
+                        resultContainer.style.display = 'block';
+                        textResultContainer.style.display = 'none';
+                    }
+                }
+            });
+
+            textViewBtn.addEventListener('click', () => {
+                if (!textViewBtn.classList.contains('active')) {
+                    textViewBtn.classList.add('active');
+                    imageViewBtn.classList.remove('active');
+                    
+                    // Update copy button tooltip and ensure dropdown is hidden
+                    copyBtn.querySelector('.tooltip').textContent = 'Copy Text';
+                    copyDropdown.style.display = 'none';
+
+                    // Only switch views if a result is already shown
+                    if (container.classList.contains('result-shown')) {
+                        textResultContainer.style.display = 'flex';
+                        resultContainer.style.display = 'none';
+                    }
+                }
+            });
+
+            pasteBtn.addEventListener('click', async () => {
+                try {
+                    const result = await window.electronAPI.readFromClipboard();
+                    if (result.success) {
+                        translatedTextView.value = result.text;
+                        // Manually trigger the input event to update the underlying data
+                        translatedTextView.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                } catch (error) {
+                    console.error('Failed to paste text:', error);
+                }
+            });
+
+            // Function to translate textarea content
+            async function translateTextareaContent() {
+                console.log('🔄 Translating clipboard content for textarea paste...');
+                
+                // Read from clipboard instead of using textarea content
+                let clipboardText;
+                try {
+                    const result = await window.electronAPI.readFromClipboard();
+                    if (!result.success || !result.text || !result.text.trim()) {
+                        console.log('⚠️ No text on clipboard to translate');
+                        return;
+                    }
+                    clipboardText = result.text.trim();
+                } catch (error) {
+                    console.error('❌ Failed to read clipboard:', error);
+                    return;
+                }
+                
+                console.log('📋 Clipboard text:', clipboardText.substring(0, 50) + '...');
+                
+                // Show visual feedback
+                const originalBorderStyle = translatedTextView.style.border;
+                translatedTextView.style.border = '2px solid #007bff';
+                
+                try {
+                    // Get current target language (should be available from the language indicator)
+                    const langIndicatorText = languageIndicator.textContent;
+                    let targetLang = 'ja'; // default
+                    if (langIndicatorText.includes('🇺🇸')) targetLang = 'en';
+                    else if (langIndicatorText.includes('🇮🇩')) targetLang = 'id';
+                    
+                    const result = await window.electronAPI.translateTextareaContent({
+                        text: clipboardText,
+                        targetLanguage: targetLang
+                    });
+                    
+                    if (result.success) {
+                        // Insert translated text at cursor position instead of replacing all
+                        const startPos = translatedTextView.selectionStart;
+                        const endPos = translatedTextView.selectionEnd;
+                        const currentText = translatedTextView.value;
+                        
+                        // Insert the translated text at cursor position
+                        const newText = currentText.substring(0, startPos) + result.translatedText + currentText.substring(endPos);
+                        translatedTextView.value = newText;
+                        
+                        // Position cursor after the inserted text
+                        const newCursorPos = startPos + result.translatedText.length;
+                        translatedTextView.setSelectionRange(newCursorPos, newCursorPos);
+                        translatedTextView.focus();
+                        
+                        // Update the stored result data
+                        if (currentResult) {
+                            currentResult.translatedText = newText;
+                        }
+                        console.log('✅ Clipboard text translated and pasted into textarea');
+                        
+                        // Show success feedback
+                        translatedTextView.style.border = '2px solid #28a745';
+                        setTimeout(() => {
+                            translatedTextView.style.border = originalBorderStyle;
+                        }, 1000);
+                    } else {
+                        console.error('Translation failed:', result.error);
+                        // Show error feedback
+                        translatedTextView.style.border = '2px solid #dc3545';
+                        setTimeout(() => {
+                            translatedTextView.style.border = originalBorderStyle;
+                        }, 1000);
+                    }
+                } catch (error) {
+                    console.error('Error translating clipboard for textarea:', error);
+                    translatedTextView.style.border = '2px solid #dc3545';
+                    setTimeout(() => {
+                        translatedTextView.style.border = originalBorderStyle;
+                    }, 1000);
+                }
+            }
 
             // ESC key to cancel (handled in the main keydown listener now)
         </script>
@@ -846,6 +1301,13 @@ class App {
       // Reset global shortcut flag when overlay is closed/cancelled
       this.globalShortcutInProgress = false;
       console.log('Capture overlay closed, flag reset');
+      
+      // After capture is closed, restore and focus the main window
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.show();
+        this.mainWindow.focus();
+        this.mainWindow.webContents.send('reset-to-home');
+      }
     });
   }
 
@@ -855,10 +1317,8 @@ class App {
       return;
     }
 
-    // Get screen dimensions for positioning
-    const { screen } = require('electron');
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { height: screenHeight } = primaryDisplay.workArea;
+    const display = this.lastActiveDisplay || screen.getPrimaryDisplay();
+    const { workArea } = display;
 
     // Gallery dimensions - START SMALL, will be resized dynamically
     const galleryWidth = 170; // Width for one item + padding
@@ -867,8 +1327,8 @@ class App {
     this.miniGalleryWindow = new BrowserWindow({
       width: galleryWidth,
       height: galleryHeight,
-      x: 15, // Add margin from left edge
-      y: screenHeight - galleryHeight, // Start position, will be adjusted
+      x: workArea.x + 15, // Position relative to the active display's work area
+      y: workArea.y + workArea.height - galleryHeight, // Start position, will be adjusted
       transparent: true,
       frame: false,
       alwaysOnTop: true,
@@ -884,6 +1344,11 @@ class App {
         preload: path.join(__dirname, 'preload.js'),
         webSecurity: false // Allow content to extend outside bounds
       }
+    });
+
+    // Make the gallery visible on all virtual desktops (Spaces)
+    this.miniGalleryWindow.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true
     });
 
     const galleryHtml = `
@@ -1607,15 +2072,14 @@ class App {
     }
 
     // --- WINDOW CREATION (if not already open) ---
-    const { screen } = require('electron');
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
+    const display = this.lastActiveDisplay || screen.getPrimaryDisplay();
+    const { workArea } = display;
     
-    const windowWidth = Math.round(screenWidth * 0.6);
-    const windowHeight = Math.round(screenHeight * 0.6);
+    const windowWidth = Math.round(workArea.width * 0.6);
+    const windowHeight = Math.round(workArea.height * 0.6);
     
-    const x = Math.round((screenWidth - windowWidth) / 2);
-    const y = Math.round((screenHeight - windowHeight) / 2);
+    const x = workArea.x + Math.round((workArea.width - windowWidth) / 2);
+    const y = workArea.y + Math.round((workArea.height - windowHeight) / 2);
 
     this.imageViewerWindow = new BrowserWindow({
       width: windowWidth,
@@ -1809,189 +2273,188 @@ class App {
     globalShortcut.unregisterAll();
     
     const shortcuts = this.storeService.getShortcuts();
+    console.log('📋 Loading shortcuts from store:', shortcuts);
     
     // Register capture & translate shortcut
     try {
       if (shortcuts['capture-translate'] && shortcuts['capture-translate'].trim()) {
-        globalShortcut.register(shortcuts['capture-translate'], async () => {
-          // Prevent execution if shortcuts are being recorded
-          if (this.shortcutsRecordingActive) {
-            console.log('Shortcuts recording active, ignoring global shortcut');
-            return;
-          }
-          
-          const now = Date.now();
-          
-          // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
-          if (now - this.lastShortcutTime < 2000) {
-            console.log('Global shortcut on cooldown, ignoring');
-            return;
-          }
-          
-          // CRITICAL: Prevent duplicate shortcut executions
-          if (this.globalShortcutInProgress) {
-            console.log('Global shortcut in progress, ignoring');
-            return;
-          }
-          
-          // ADDITIONAL PROTECTION: Check if capture window already exists
-          if (this.captureWindow) {
-            console.log('Capture window exists, ignoring shortcut');
-            return;
-          }
-          
-          this.globalShortcutInProgress = true;
-          this.lastShortcutTime = now;
-          console.log('Global shortcut activated');
-          
-          console.log('Global shortcut pressed - starting smart capture sequence...');
-          
+        console.log('🔄 Registering capture-translate shortcut:', shortcuts['capture-translate']);
+        const success = globalShortcut.register(shortcuts['capture-translate'], async () => {
           try {
-            // Check permissions silently first
-            const hasPermission = await this.checkScreenPermissions(false);
-            if (!hasPermission) {
-              console.log('Screen recording permission needed, showing permission dialog...');
-              // Now show the dialog since permission is actually needed
-              const dialogResult = await this.checkScreenPermissions(true);
-              if (!dialogResult) {
-                this.globalShortcutInProgress = false;
-                this.lastShortcutTime = 0;
-                return;
-              }
-              
-              // If permission was "not-determined", we need to trigger the system dialog
-              const initialStatus = systemPreferences.getMediaAccessStatus('screen');
-              if (initialStatus === 'not-determined') {
-                console.log('Triggering system permission dialog...');
-                
-                // Ensure main window is visible to show toast messages
-                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                  this.mainWindow.show();
-                  this.mainWindow.focus();
-                }
-                
-                // Take a quick screenshot to trigger the system permission dialog
-                try {
-                  await this.screenshotService.captureFullScreen();
-                } catch (error) {
-                  console.log('Screenshot attempt triggered permission dialog (expected)');
-                }
-                
-                // Wait for user to grant permission
-                const permissionGranted = await this.waitForScreenPermission();
-                if (!permissionGranted) {
-                  console.log('Permission denied via global shortcut');
-                  // Keep main window visible on permission denial
-                  if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                    this.mainWindow.show();
-                    this.mainWindow.focus();
-                  }
-                  this.globalShortcutInProgress = false;
-                  this.lastShortcutTime = 0;
-                  return;
-                }
-                
-                // IMPORTANT: Permission was just granted, so we need to verify it's actually working
-                // Wait a moment for the system to fully apply the permission
-                console.log('Permission granted, verifying...');
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Double-check permission status
-                const finalStatus = systemPreferences.getMediaAccessStatus('screen');
-                if (finalStatus !== 'granted') {
-                  console.log('Permission verification failed:', finalStatus);
-                  // Keep main window visible on permission issue
-                  if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                    this.mainWindow.show();
-                    this.mainWindow.focus();
-                  }
-                  this.globalShortcutInProgress = false;
-                  this.lastShortcutTime = 0;
-                  return;
-                }
-              }
+            // Prevent execution if shortcuts are being recorded
+            if (this.shortcutsRecordingActive) {
+              console.log('Shortcuts recording active, ignoring global shortcut');
+              return;
             }
             
-            console.log('Permission check passed, proceeding with capture...');
+            const now = Date.now();
             
-            // NEW STRATEGY: Use system APIs to properly handle window switching
+            // COOLDOWN: Prevent rapid successive shortcut presses (2 second minimum)
+            if (now - this.lastShortcutTime < 2000) {
+              console.log('Global shortcut on cooldown, ignoring');
+              return;
+            }
             
-            // Step 1: Get the current frontmost app before we interfere
-            const frontmostApp = await this.getFrontmostApplication();
-            console.log('Frontmost app detected:', frontmostApp);
+            // CRITICAL: Prevent duplicate shortcut executions
+            if (this.globalShortcutInProgress) {
+              console.log('Global shortcut in progress, ignoring');
+              return;
+            }
             
-            // Step 2: Hide TransPad AI completely (not just minimize)
+            // ADDITIONAL PROTECTION: Check if capture window already exists
+            if (this.captureWindow) {
+              console.log('Capture window exists, ignoring shortcut');
+              return;
+            }
+            
+            this.globalShortcutInProgress = true;
+            this.lastShortcutTime = now;
+            console.log('Global shortcut activated');
+            
+            // Check permissions silently first. This is a quick operation.
+            const hasPermission = await this.checkScreenPermissions(false);
+            if (!hasPermission) {
+              this.showPermissionToast('TransPad AI needs Screen Recording permission. Please grant it in System Settings.');
+              this.globalShortcutInProgress = false; // Reset flag
+              return;
+            }
+            
+            // --- OPTIMIZATION: Show the capture window immediately ---
+            
+            // 1. Hide the main window first.
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
               this.mainWindow.hide();
             }
+
+            // 2. Get cursor position.
+            const cursor = screen.getCursorScreenPoint();
             
-            // Step 3: If the frontmost app wasn't TransPad AI, try to restore it
-            if (frontmostApp && frontmostApp !== 'TransPad AI' && frontmostApp !== 'Electron') {
-              console.log(`Attempting to restore ${frontmostApp}...`);
-              await this.restoreFrontmostApp(frontmostApp);
-              
-              // Wait for the app to redraw
-              await new Promise(resolve => setTimeout(resolve, 500));
-            } else {
-              // If TransPad AI was frontmost, just wait for desktop
-              console.log('TransPad AI was frontmost, waiting for desktop...');
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-            
-            // Step 4: Take screenshot
-            console.log('Taking screenshot of current state...');
-            const preCapture = await this.screenshotService.captureFullScreenBackground();
-            this.preCaptureScreenshot = preCapture;
-            console.log('Pre-capture completed, creating overlay...');
-            
-            // Step 5: Show overlay for selection - with additional check
-            if (!this.captureWindow) {
-              await this.startScreenCaptureWithoutPreCapture();
-            } else {
-              console.log('❌ Capture window created during process, skipping overlay creation');
-            }
-            
-            // Mark that we've used capture successfully (for future runs)
-            this.hasUsedCaptureSuccessfully = true;
-            
-            // DO NOT reset flag here - wait for actual capture completion or cancellation
-            
+            // 3. Create the overlay instantly at the cursor's position.
+            // All slow tasks (like taking screenshots) are deferred until the user presses Enter.
+            this.createCaptureOverlay(cursor);
+
           } catch (error) {
-            console.error('Error in smart capture sequence:', error);
-            // On error, restore the main window
+            console.error('Error in capture shortcut callback:', error);
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
               this.mainWindow.show();
               this.mainWindow.focus();
             }
-            // Reset flag on error
             this.globalShortcutInProgress = false;
             this.lastShortcutTime = 0;
-            console.log('Global shortcut error, flag reset');
           }
         });
+        
+        if (success) {
+          console.log('✅ Capture-translate shortcut registered successfully');
+        } else {
+          console.error('❌ Failed to register capture & translate shortcut:', shortcuts['capture-translate']);
+        }
+      } else {
+        console.log('⚠️ No capture-translate shortcut configured');
       }
     } catch (error) {
-      console.error('Error registering shortcuts:', error);
+      console.error('Error registering capture-translate shortcut:', error);
     }
 
     // Register global shortcut for clipboard translation
     try {
       if (shortcuts['translate-paste'] && shortcuts['translate-paste'].trim()) {
-        globalShortcut.register(shortcuts['translate-paste'], async () => {
-          // Prevent execution if shortcuts are being recorded
-          if (this.shortcutsRecordingActive) {
-            console.log('Shortcuts recording active, ignoring global shortcut');
-            return;
+        console.log('🔄 Registering translate-paste shortcut:', shortcuts['translate-paste']);
+        const success = globalShortcut.register(shortcuts['translate-paste'], async () => {
+          try {
+            // Prevent execution if shortcuts are being recorded
+            if (this.shortcutsRecordingActive) {
+              console.log('Shortcuts recording active, ignoring translate-paste shortcut');
+              return;
+            }
+            
+            // Check if capture window is focused - let it handle the shortcut locally
+            if (this.captureWindow && !this.captureWindow.isDestroyed() && this.captureWindow.isFocused()) {
+              console.log('🎯 Capture window is focused, letting it handle Command+Shift+T locally');
+              // Send a message to the capture window to handle the shortcut
+              this.captureWindow.webContents.send('handle-local-translate-shortcut');
+              return;
+            }
+            
+            console.log('🚀 Global "Translate & Paste Clipboard" shortcut activated!');
+            console.log('⏰ Timestamp:', new Date().toISOString());
+            console.log('🎯 About to call translateAndReplaceClipboard...');
+            
+            await this.translateAndReplaceClipboard();
+            console.log('✅ Translate and paste completed successfully');
+          } catch (error) {
+            console.error('❌ Error in translate-paste shortcut callback:', error);
           }
-          
-          console.log('Global "Translate & Paste Clipboard" shortcut activated.');
-          await this.translateAndReplaceClipboard();
         });
+        
+        if (success) {
+          console.log('✅ Translate-paste shortcut registered successfully');
+        } else {
+          console.error('❌ Failed to register translate-paste shortcut:', shortcuts['translate-paste']);
+        }
+      } else {
+        console.log('⚠️ No translate-paste shortcut configured');
       }
     } catch (error) {
       console.error('Error registering translate-paste shortcut:', error);
     }
+
+    // Register copy last translation shortcut - DISABLED
+    // if (shortcuts['copy-last-translation'] && shortcuts['copy-last-translation'].trim()) {
+    //   console.log('🔄 Registering copy-last-translation shortcut:', shortcuts['copy-last-translation']);
+    //   const success = globalShortcut.register(shortcuts['copy-last-translation'], async () => {
+    //     try {
+    //       // Prevent execution if shortcuts are being recorded
+    //       if (this.shortcutsRecordingActive) {
+    //         console.log('Shortcuts recording active, ignoring copy-last-translation shortcut');
+    //         return;
+    //       }
+    //       
+    //       console.log('🚀 Global "Copy Last Translation" shortcut activated!');
+    //       if (this.lastLupResult && this.lastLupResult.translatedText) {
+    //         clipboard.writeText(this.lastLupResult.translatedText);
+    //         
+    //         // Show a confirmation notification
+    //         if (Notification.isSupported()) {
+    //           new Notification({
+    //             title: 'Translation Copied',
+    //             body: 'The last translated text has been copied to your clipboard.',
+    //             silent: true
+    //           }).show();
+    //         }
+    //         console.log('✅ Last translation copied to clipboard');
+    //       } else {
+    //         console.log('⚠️ No last translation available to copy');
+    //       }
+    //     } catch (error) {
+    //       console.error('❌ Error in copy-last-translation shortcut callback:', error);
+    //     }
+    //   });
+    //   
+    //   if (success) {
+    //     console.log('✅ Copy-last-translation shortcut registered successfully');
+    //   } else {
+    //     console.error('❌ Failed to register copy-last-translation shortcut:', shortcuts['copy-last-translation']);
+    //   }
+    // } catch (error) {
+    //   console.error('Error registering copy-last-translation shortcut:', error);
+    // }
+
+    // Log all currently registered shortcuts
+    try {
+      const registeredShortcuts = globalShortcut.getRegisteredAccelerators();
+      console.log('📋 All registered shortcuts:', registeredShortcuts);
+    } catch (error) {
+      console.log('⚠️ Could not get registered shortcuts (this is normal in some Electron versions)');
+    }
+    
+    console.log('🎯 Shortcut registration complete. Testing translate-paste shortcut...');
+    console.log('🔍 If Command+Shift+T is not working, check:');
+    console.log('   1. Are you pressing the right keys?');
+    console.log('   2. Is another app using this shortcut?');
+    console.log('   3. Is the app in focus/background?');
   }
+
 
   setupIpcHandlers() {
     ipcMain.handle('start-capture', async () => {
@@ -2057,7 +2520,7 @@ class App {
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
           this.mainWindow.hide();
         }
-        await new Promise(resolve => setTimeout(resolve, 300)); // Wait for hide animation
+        // REMOVED: Unnecessary delay was here.
         this.createCaptureOverlay();
 
         return { success: true };
@@ -2075,10 +2538,13 @@ class App {
 
         const bounds = this.captureWindow.getBounds();
         
+        // --- Multi-monitor support: Determine the active display ---
+        const activeDisplay = screen.getDisplayMatching(bounds);
+        
         // --- Hide, screenshot, then show to avoid flicker ---
         this.captureWindow.hide();
         await new Promise(resolve => setTimeout(resolve, 60)); 
-        const screenshot = await this.screenshotService.captureFullScreenBackground();
+        const screenshot = await this.screenshotService.captureFullScreenBackground(activeDisplay);
         this.captureWindow.show();
         
         // --- Show progress step 1: Extracting ---
@@ -2088,7 +2554,8 @@ class App {
         
         const imagePath = await this.screenshotService.captureAreaFromExisting(
           bounds, 
-          screenshot.filePath
+          screenshot.filePath,
+          activeDisplay // Pass the active display for coordinate calculations
         );
         
         const extractionResult = await this.visionService.extractText(imagePath);
@@ -2103,29 +2570,23 @@ class App {
           this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
         }
 
-        // Use the selected target language instead of auto-detection
-        console.log(`Using selected target language: ${this.targetLanguage}`);
-        
-        // --- NEW: Add another loading step for image creation ---
-        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
-          this.captureWindow.webContents.send('update-loading-step', 'Creating translated image...');
-        }
-
+        const quality = this.storeService.store.get('captureQuality', 'medium');
         const translationResult = await this.screenshotService.createImageWithTranslation(
           imagePath, 
           extractionResult.fullText, 
           extractionResult.textBlocks,
-          this.targetLanguage  // Pass the selected target language
+          this.targetLanguage,
+          quality
         );
 
         this.lastLupResult = {
-          id: `cap-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Unique ID
+          id: `cap-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           success: true,
           originalText: extractionResult.fullText,
           translatedText: translationResult.fullTranslatedText,
           imagePath: imagePath,
           detectedLanguage: translationResult.detectedLanguage,
-          targetLanguage: this.targetLanguage, // Use selected target language
+          targetLanguage: this.targetLanguage,
           textBlocks: extractionResult.textBlocks
         };
         
@@ -2136,6 +2597,9 @@ class App {
           this.mainWindow.webContents.send('capture-complete', this.lastLupResult);
         }
 
+        // Store the active display for positioning the gallery
+        this.lastActiveDisplay = activeDisplay; 
+        
         // 2. Add to mini gallery
         this.addCaptureToGallery(this.lastLupResult, translationResult);
 
@@ -2206,17 +2670,7 @@ class App {
     ipcMain.handle('close-capture-overlay', () => {
       if (this.captureWindow) {
         this.captureWindow.close();
-        this.captureWindow = null;
       }
-      // Restore the main window when the lup is closed
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.show();
-        this.mainWindow.focus();
-        // Tell the renderer to go back to the home screen
-        this.mainWindow.webContents.send('reset-to-home');
-      }
-      this.globalShortcutInProgress = false;
-      console.log('Capture overlay closed, flag reset');
     });
 
     ipcMain.handle('capture-area', async (event, bounds) => {
@@ -2323,10 +2777,15 @@ class App {
     // Clipboard operations
     ipcMain.handle('copy-as-image', async (event, imageDataUrl) => {
       try {
-        // Convert data URL to native image
+        // Convert data URL to native image and copy to clipboard
         const image = nativeImage.createFromDataURL(imageDataUrl);
         clipboard.writeImage(image);
-        console.log('Image copied to clipboard successfully');
+        
+        // Generate the filename that would be used if this were saved as a file
+        const timestamp = this.formatDateForFilename(new Date());
+        const intendedFilename = `TransPad ${timestamp}.png`;
+        
+        console.log('Image copied to clipboard successfully (intended filename:', intendedFilename + ')');
         return { success: true };
       } catch (error) {
         console.error('Error copying image to clipboard:', error);
@@ -2494,9 +2953,9 @@ class App {
           fs.mkdirSync(tempDir, { recursive: true });
         }
         
-        // Use TransPad-AI naming format with timestamp
-        const timestamp = Date.now();
-        const tempFilePath = path.join(tempDir, `TransPad-AI-${timestamp}.png`);
+        // Use TransPad naming format with timestamp
+        const timestamp = this.formatDateForFilename(new Date());
+        const tempFilePath = path.join(tempDir, `TransPad ${timestamp}.png`);
         fs.writeFileSync(tempFilePath, imageBuffer);
         
         // Store the temp file path for cleanup
@@ -2551,9 +3010,43 @@ class App {
         return { success: false, error: error.message };
       }
     });
+
+    ipcMain.handle('read-from-clipboard', async () => {
+      try {
+        const text = clipboard.readText();
+        return { success: true, text: text };
+      } catch (error) {
+        console.error('Error reading from clipboard:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('translate-textarea-content', async (event, { text, targetLanguage }) => {
+      try {
+        console.log('🔄 Translating textarea content:', text.substring(0, 50) + '...');
+        const translatedText = await this.translationService.translateText(text, targetLanguage);
+        console.log('✅ Textarea translation completed');
+        return { success: true, translatedText };
+      } catch (error) {
+        console.error('❌ Error translating textarea content:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
   }
 
-  async startScreenCaptureWithoutPreCapture() {
+  formatDateForFilename(date) {
+    const pad = (num) => num.toString().padStart(2, '0');
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1);
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
+    return `${year}-${month}-${day} ${hours}.${minutes}.${seconds}`;
+  }
+
+  async startScreenCaptureWithoutPreCapture(cursorPosition = null) {
     try {
       // If capture window already exists, close it first
       if (this.captureWindow) {
@@ -2570,7 +3063,7 @@ class App {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // Create the transparent overlay for global area selection
-      this.createCaptureOverlay();
+      this.createCaptureOverlay(cursorPosition);
       
       return { success: true };
     } catch (error) {
@@ -2901,11 +3394,13 @@ class App {
       }
 
       // 4. Translate and create the new image
+      const quality = this.storeService.store.get('captureQuality', 'medium');
       const translationResult = await this.screenshotService.createImageWithTranslation(
         imagePath,
         extractionResult.fullText,
         extractionResult.textBlocks,
-        this.targetLanguage
+        this.targetLanguage,
+        quality
       );
 
       // 5. Send result to renderer (same as capture)
@@ -2944,58 +3439,145 @@ class App {
     }
   }
 
-  async translateAndReplaceClipboard() {
+  async checkAccessibilityPermissions() {
+    if (process.platform !== 'darwin') {
+      return true; // Non-macOS platforms don't need this
+    }
+
     try {
+      const { exec } = require('child_process');
+      
+      // Check if we have accessibility permissions by trying a simple keystroke test
+      return new Promise((resolve) => {
+        const testScript = `osascript -e 'tell application "System Events" to key code 53'`; // ESC key test
+        exec(testScript, { timeout: 1000 }, (error, stdout, stderr) => {
+          if (error && error.message.includes('1002')) {
+            console.log('❌ Accessibility permissions not granted');
+            resolve(false);
+          } else {
+            console.log('✅ Accessibility permissions available');
+            resolve(true);
+          }
+        });
+      });
+    } catch (error) {
+      console.error('Error checking accessibility permissions:', error);
+      return false;
+    }
+  }
+
+  async requestAccessibilityPermissions() {
+    try {
+      const result = await dialog.showMessageBox(this.mainWindow, {
+        type: 'info',
+        title: 'Accessibility Permission Required',
+        message: 'TransPad AI needs accessibility permission to paste translated text automatically.',
+        detail: 'Please grant permission in System Preferences > Security & Privacy > Privacy > Accessibility.\n\nAfter granting permission, the translate & paste shortcut will work seamlessly.',
+        buttons: ['Open System Preferences', 'Skip Auto-Paste'],
+        defaultId: 0
+      });
+      
+      if (result.response === 0) {
+        // Open System Preferences to Accessibility section
+        const { exec } = require('child_process');
+        exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"');
+      }
+      
+      return result.response === 0;
+    } catch (error) {
+      console.error('Error requesting accessibility permissions:', error);
+      return false;
+    }
+  }
+
+  async translateAndReplaceClipboard() {
+    console.log('🚀 translateAndReplaceClipboard function called');
+    
+    try {
+      console.log('📋 Reading clipboard content...');
       const text = clipboard.readText();
+      console.log('📋 Clipboard text length:', text ? text.length : 0);
+      console.log('📋 Clipboard text preview:', text ? text.substring(0, 50) + '...' : 'empty');
+      
       if (!text || text.trim() === '') {
-        console.log('No text on clipboard to translate.');
-        if (Notification.isSupported()) {
-          new Notification({
-            title: 'Clipboard Empty',
-            body: 'There is no text on the clipboard to translate.',
-            silent: true
-          }).show();
-        }
+        console.log('❌ No text on clipboard to translate.');
         return;
       }
 
-      console.log(`Translating and pasting clipboard: "${text.substring(0, 30)}..."`);
+      console.log(`🔄 Translating clipboard text to ${this.targetLanguage}: "${text.substring(0, 30)}..."`);
 
       const translatedText = await this.translationService.translateText(text, this.targetLanguage);
+      console.log('✅ Translation completed:', translatedText ? translatedText.substring(0, 50) + '...' : 'empty');
+      
       if (!translatedText) {
         throw new Error('Translation service failed to return a result.');
       }
 
-      // Temporarily hide our app to focus the previous one
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.hide();
-      }
-
       // Put the translated text on the clipboard
       clipboard.writeText(translatedText);
+      console.log('📋 Translated text written to clipboard');
       
-      // Give the OS a moment to switch focus
+      // Wait a moment for clipboard to be processed
       await new Promise(resolve => setTimeout(resolve, 200));
 
-      // Use AppleScript to simulate a paste command
-      const { exec } = require('child_process');
-      const script = `osascript -e 'tell application "System Events" to keystroke "v" using command down'`;
-      exec(script, (error) => {
-        if (error) {
-          console.error('Failed to execute paste command:', error);
-          // If pasting fails, at least the text is on the clipboard.
-          // Show the window again so the user isn't confused.
-          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-            this.mainWindow.show();
-          }
-        } else {
-          console.log('Paste command executed successfully.');
-          // Optionally, briefly show and re-hide the window to show the notification,
-          // or just let it stay hidden. For now, we'll keep it hidden.
+      // Check accessibility permissions first
+      const hasAccessibility = await this.checkAccessibilityPermissions();
+      
+      if (!hasAccessibility) {
+        console.log('⚠️ No accessibility permissions - auto-paste disabled');
+        console.log('📋 Translated text is on clipboard, ready for manual paste with ⌘V');
+        
+        // For first-time users, show permission dialog (but only once per session)
+        if (!this.accessibilityPermissionAsked) {
+          this.accessibilityPermissionAsked = true;
+          setTimeout(() => {
+            this.requestAccessibilityPermissions();
+          }, 500); // Small delay to not interrupt the workflow
         }
-      });
+        
+        // Store result and exit - text is ready for manual paste
+        this.lastLupResult = {
+          id: `text-replace-${Date.now()}`,
+          success: true,
+          originalText: text,
+          translatedText: translatedText,
+          imagePath: null,
+          detectedLanguage: 'unknown',
+          targetLanguage: this.targetLanguage,
+          textBlocks: []
+        };
+        
+        console.log('🎉 Translation completed - text ready for manual paste');
+        return;
+      }
 
-      // Store this as the last result so it can be copied
+      // We have permissions, proceed with auto-paste
+      const { exec } = require('child_process');
+      
+      console.log('🎯 Attempting auto-paste...');
+      
+      try {
+        // Use simplified AppleScript approach since we have permissions
+        const pasteScript = `osascript -e 'delay 0.1' -e 'tell application "System Events" to key code 9 using command down'`;
+        
+        await new Promise((resolve, reject) => {
+          exec(pasteScript, { timeout: 2000 }, (error, stdout, stderr) => {
+            if (error) {
+              console.log('❌ Auto-paste failed:', error.message);
+              reject(error);
+            } else {
+              console.log('✅ Auto-paste completed successfully');
+              resolve();
+            }
+          });
+        });
+        
+      } catch (pasteError) {
+        console.log('⚠️ Auto-paste failed, text remains on clipboard for manual paste');
+        console.log('📋 Error details:', pasteError.message);
+      }
+
+      // Store this as the last result for future reference  
       this.lastLupResult = {
         id: `text-replace-${Date.now()}`,
         success: true,
@@ -3007,27 +3589,11 @@ class App {
         textBlocks: []
       };
 
-      // Show a confirmation notification
-      if (Notification.isSupported()) {
-        const languageName = new Intl.DisplayNames(['en'], { type: 'language' }).of(this.targetLanguage) || this.targetLanguage;
-        new Notification({
-          title: `Translated to ${languageName} & Copied`,
-          body: translatedText,
-          silent: true
-        }).show();
-      }
-
-      console.log(`Clipboard replacement successful.`);
+      console.log('💾 Stored result for reference');
+      console.log('🎉 Clipboard translation process completed successfully');
 
     } catch (error) {
-      console.error('Error translating and pasting clipboard:', error);
-      if (Notification.isSupported()) {
-        new Notification({
-          title: 'Translation Failed',
-          body: 'Could not translate the text from the clipboard.',
-          silent: true
-        }).show();
-      }
+      console.error('❌ Error in translateAndReplaceClipboard:', error);
     }
   }
 }
