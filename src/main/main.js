@@ -3248,13 +3248,6 @@ class App {
       
       if (!text || text.trim() === '') {
         console.log('No text on clipboard to translate.');
-        if (Notification.isSupported()) {
-          new Notification({
-            title: 'Clipboard Empty',
-            body: 'There is no text on the clipboard to translate.',
-            silent: true
-          }).show();
-        }
         return;
       }
 
@@ -3305,27 +3298,10 @@ class App {
         textBlocks: []
       };
 
-      // Show a confirmation notification
-      if (Notification.isSupported()) {
-        const languageName = new Intl.DisplayNames(['en'], { type: 'language' }).of(this.targetLanguage) || this.targetLanguage;
-        new Notification({
-          title: `Translated to ${languageName} & Copied`,
-          body: translatedText,
-          silent: true
-        }).show();
-      }
-
       console.log(`Clipboard replacement successful.`);
 
     } catch (error) {
       console.error('Error translating and pasting clipboard:', error);
-      if (Notification.isSupported()) {
-        new Notification({
-          title: 'Translation Failed',
-          body: 'Could not translate the text from the clipboard.',
-          silent: true
-        }).show();
-      }
     }
   }
 }
