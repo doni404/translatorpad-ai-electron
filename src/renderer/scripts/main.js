@@ -692,6 +692,8 @@ function loadHistory() {
 }
 
 function showTranslationResult(translation) {
+    console.log('🎯 showTranslationResult called with translation data');
+    
     const modal = document.getElementById('resultsModal');
     const originalTextEl = document.getElementById('originalText');
     const translatedTextEl = document.getElementById('translatedText');
@@ -699,11 +701,21 @@ function showTranslationResult(translation) {
     const targetLanguageSelect = document.getElementById('targetLanguageSelect');
     const retranslateBtn = document.getElementById('retranslateBtn');
 
+    console.log('🔍 Modal elements found:', {
+        modal: !!modal,
+        originalTextEl: !!originalTextEl,
+        translatedTextEl: !!translatedTextEl,
+        modalHeader: !!modalHeader,
+        targetLanguageSelect: !!targetLanguageSelect,
+        retranslateBtn: !!retranslateBtn
+    });
+
     if (!modal || !originalTextEl || !translatedTextEl || !modalHeader || !targetLanguageSelect || !retranslateBtn) {
-        console.error('One or more modal elements are missing from the DOM.');
+        console.error('❌ One or more modal elements are missing from the DOM.');
         return;
     }
     
+    console.log('📝 Setting text content...');
     originalTextEl.textContent = translation.originalText;
     translatedTextEl.textContent = translation.translatedText;
     
@@ -715,7 +727,13 @@ function showTranslationResult(translation) {
 
     retranslateBtn.disabled = !translation.textBlocks || translation.textBlocks.length === 0;
 
+    console.log('🎨 Showing modal...');
     modal.classList.add('active');
+    
+    console.log('✅ Modal should now be visible with class "active"');
+    
+    // Force a reflow to ensure the modal is displayed
+    modal.offsetHeight;
 }
 
 // Helper function to get language name from code
@@ -924,13 +942,24 @@ Need help? Check the README.md for detailed instructions.
 
 // Handle capture completion
 function handleCaptureComplete(result) {
+    console.log('🎯 handleCaptureComplete called with result:', {
+        success: result.success,
+        hasOriginalText: !!result.originalText,
+        hasTranslatedText: !!result.translatedText,
+        detectedLanguage: result.detectedLanguage,
+        targetLanguage: result.targetLanguage
+    });
+    
     showLoading(false);
 
     if (result.success) {
+        console.log('✅ Result successful, storing and showing translation...');
         currentResultData = result; // Store the complete result object
         showTranslationResult(result);
         addToHistory(result);
+        console.log('✅ Translation result displayed and added to history');
     } else {
+        console.error('❌ Capture failed:', result.error);
         showError('Capture failed: ' + result.error);
     }
 }
