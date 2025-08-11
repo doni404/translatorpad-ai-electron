@@ -397,8 +397,29 @@
                                 <input type="text" class="shortcut-input" id="translate-paste" readonly placeholder="Click to record">
                             </div>
                             <div class="setting-item">
+                                <label for="ai-translate-paste">AI Translate & Paste</label>
+                                <input type="text" class="shortcut-input" id="ai-translate-paste" readonly placeholder="Click to record">
+                            </div>
+                            <div class="setting-item">
                                 <button type="button" id="reset-shortcuts-button" class="btn btn-secondary">Reset to Defaults</button>
                             </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h3>OpenAI Settings</h3>
+                            <div class="setting-item">
+                                <label for="openAIModel">Model</label>
+                                <select id="openAIModel" class="setting-select">
+                                    <option value="gpt5">GPT-5 (advanced; nuanced tone)</option>
+                                    <option value="gpt4" selected>GPT-4 (balanced; high quality)</option>
+                                    <option value="gpt3">GPT-3 (fast, cheap; simple rewrites)</option>
+                                </select>
+                            </div>
+                            <div class="setting-item" style="align-items: flex-start; gap: 12px;">
+                                <label for="openAIPrompt" style="padding-top: 6px;">Prompt</label>
+                                <textarea id="openAIPrompt" rows="4" style="flex:1; padding:8px; border:2px solid #e2e8f0; border-radius:8px; font-size:13px;" placeholder="Improve grammar and politeness, then translate into [TARGET_LANGUAGE]. Return only the final text."></textarea>
+                            </div>
+                            <p class="setting-help-text">Use [TARGET_LANGUAGE] to dynamically insert your current target language.</p>
                         </div>
                         
                         <div class="settings-section">

@@ -12,6 +12,10 @@ const schema = {
 			'translate-paste': {
 				type: 'string',
 				default: 'CommandOrControl+Shift+T'
+			},
+			'ai-translate-paste': {
+				type: 'string',
+				default: 'CommandOrControl+Shift+Y'
 			}
 		},
 		default: {}
@@ -19,6 +23,15 @@ const schema = {
 	targetLanguage: {
 		type: 'string',
 		default: 'ja'
+	},
+	openAISettings: {
+		type: 'object',
+		properties: {
+			model: { type: 'string', default: 'gpt4' },
+			prompt: { type: 'string', default: 'Improve the grammar, clarity, and politeness of the following text, then translate it into [TARGET_LANGUAGE]. Keep meaning intact, be concise and natural, and suitable for professional communication. Return only the final text with no explanations.' },
+			apiKey: { type: 'string', default: '' }
+		},
+		default: {}
 	}
 };
 
@@ -30,67 +43,90 @@ class StoreService {
 
         // Ensure defaults are set on first run
         const existingShortcuts = this.store.get('shortcuts');
-        console.log('📋 Existing shortcuts in store:', existingShortcuts);
-        
         const defaults = this.getDefaultShortcuts();
-        console.log('📋 Default shortcuts:', defaults);
-        
         const mergedShortcuts = {
             ...defaults,
             ...existingShortcuts
         };
-        
-        // Remove the copy-last-translation shortcut if it exists
         if (mergedShortcuts['copy-last-translation']) {
             delete mergedShortcuts['copy-last-translation'];
-            console.log('🗑️ Removed copy-last-translation shortcut from config');
         }
-        
-        console.log('📋 Merged shortcuts to store:', mergedShortcuts);
         this.store.set('shortcuts', mergedShortcuts);
         
-        // Verify the shortcuts were stored
-        const storedShortcuts = this.store.get('shortcuts');
-        console.log('📋 Verified stored shortcuts:', storedShortcuts);
+        // Initialize OpenAI settings with defaults if missing
+        const existingOpenAI = this.store.get('openAISettings') || {};
+        const defaultOpenAI = this.getDefaultOpenAISettings();
+        this.store.set('openAISettings', { ...defaultOpenAI, ...existingOpenAI });
     }
 
     getDefaultShortcuts() {
         const defaults = {
             'capture-translate': 'CommandOrControl+Shift+S',
-            'translate-paste': 'CommandOrControl+Shift+T'
+            'translate-paste': 'CommandOrControl+Shift+T',
+            'ai-translate-paste': 'CommandOrControl+Shift+Y'
         };
-        console.log('📋 Getting default shortcuts:', defaults);
         return defaults;
     }
 
+    getDefaultOpenAISettings() {
+        return {
+            model: 'gpt4',
+            prompt: 'Improve the grammar, clarity, and politeness of the following text, then translate it into [TARGET_LANGUAGE]. Keep meaning intact, be concise and natural, and suitable for professional communication. Return only the final text with no explanations. \n\nAlways at the first say “[Translated by xxx Model/n[Content]”, fill xxx with model name used.',
+            apiKey: ''
+        };
+    }
+
     getShortcuts() {
-        const shortcuts = this.store.get('shortcuts');
-        console.log('📋 Retrieved shortcuts from store:', shortcuts);
-        return shortcuts;
+        return this.store.get('shortcuts');
     }
 
     getTargetLanguage() {
-        const language = this.store.get('targetLanguage');
-        console.log('🌍 Retrieved target language:', language);
-        return language;
+        return this.store.get('targetLanguage');
     }
     
     setShortcuts(shortcuts) {
-        console.log('📋 Setting shortcuts in store:', shortcuts);
         this.store.set('shortcuts', shortcuts);
-        
-        // Verify the shortcuts were stored
-        const storedShortcuts = this.store.get('shortcuts');
-        console.log('📋 Verified stored shortcuts after set:', storedShortcuts);
     }
 
     setTargetLanguage(language) {
-        console.log('🌍 Setting target language:', language);
         this.store.set('targetLanguage', language);
     }
 
+    _normalizeModel(model) {
+        if (!model || typeof model !== 'string') return 'gpt4';
+        const m = model.toLowerCase().trim();
+        if (m === 'gpt-5') return 'gpt5';
+        if (m === 'gpt-4') return 'gpt4';
+        if (m === 'gpt-3') return 'gpt3';
+        if (['gpt5','gpt4','gpt3'].includes(m)) return m;
+        return 'gpt4';
+    }
+
+    getOpenAISettings() {
+        const current = this.store.get('openAISettings') || {};
+        const normalized = { ...this.getDefaultOpenAISettings(), ...current };
+        normalized.model = this._normalizeModel(normalized.model);
+        if (normalized.model !== current.model) {
+            this.store.set('openAISettings', normalized);
+        }
+        console.log('🧠 Retrieved OpenAI settings:', { ...normalized, apiKey: normalized?.apiKey ? '***' : '' });
+        return normalized;
+    }
+
+    setOpenAISettings(settings) {
+        const current = this.store.get('openAISettings') || {};
+        const next = { ...current, ...settings };
+        next.model = this._normalizeModel(next.model);
+        this.store.set('openAISettings', next);
+    }
+
+    resetOpenAISettings() {
+        const defaults = this.getDefaultOpenAISettings();
+        this.store.set('openAISettings', defaults);
+        return defaults;
+    }
+
     resetShortcuts() {
-        console.log('🔄 Resetting shortcuts to defaults');
         const defaults = this.getDefaultShortcuts();
         this.setShortcuts(defaults);
         return defaults;

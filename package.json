@@ -42,7 +42,8 @@
     "electron-store": "^8.1.0",
     "is": "^3.3.0",
     "screenshot-desktop": "^1.15.0",
-    "sharp": "^0.32.6"
+    "sharp": "^0.32.6",
+    "openai": "^4.54.0"
   },
   "build": {
     "appId": "com.gloding.transpad-ai",
@@ -62,7 +63,8 @@
     "asarUnpack": [
       "node_modules/@google-cloud/**/*",
       "node_modules/sharp/**/*",
-      "credentials/google-cloud-key.json"
+      "credentials/google-cloud-key.json",
+      "credentials/openai-key.json"
     ],
     "mac": {
       "icon": "assets/icons/transpad_512x512.png",

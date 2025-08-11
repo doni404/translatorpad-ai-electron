@@ -115,7 +115,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners();
   },
 
-  // New function
+  // External Links
   openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
 
   // New listener
@@ -139,9 +139,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Dialogs
   showClearHistoryDialog: () => ipcRenderer.invoke('show-clear-history-dialog'),
 
-  // External Links
-  openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
-
   // Gallery Management
   resizeGalleryWindow: (size) => ipcRenderer.invoke('resize-gallery-window', size),
 
@@ -164,5 +161,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Local translate shortcut handler
   onHandleLocalTranslateShortcut: (callback) => {
     ipcRenderer.on('handle-local-translate-shortcut', () => callback());
-  }
+  },
+
+  // OpenAI settings
+  getOpenAISettings: () => ipcRenderer.invoke('get-openai-settings'),
+  setOpenAISettings: (settings) => ipcRenderer.invoke('set-openai-settings', settings)
 }); 
